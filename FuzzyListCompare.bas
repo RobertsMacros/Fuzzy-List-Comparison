@@ -2,47 +2,69 @@ Attribute VB_Name = "FuzzyListCompare"
 Option Explicit
 
 ' =============================================================================
-' FuzzyListCompare
+' FuzzyListCompare — Row-wise Fuzzy Duplicate Finder
 ' =============================================================================
-' Compares an arbitrary number of lists (one per column) on the active sheet
-' using character-bag fuzzy matching. Each cell is colour-coded by its best
-' match confidence against items in every other list. A deduplicated "Unique
-' Items" column and a "Present In" column are appended to the right.
+' For each item in each list column, finds the best fuzzy match in every other
+' list. Outputs pairwise confidence scores and matched text as new columns
+' aligned row-by-row with the original data, making it easy to filter and sort.
+' Original cells are colour-coded by their best overall match confidence.
 ' =============================================================================
 
 ' ---------------------------------------------------------------------------
-' CleanString — strip punctuation, collapse spaces, lowercase
+' CleanString — strip leading numbering, punctuation, collapse spaces, lowercase
 ' ---------------------------------------------------------------------------
 Private Function CleanString(ByVal s As String) As String
     Dim i As Long
     Dim ch As String
     Dim result As String
+    Dim startPos As Long
 
+    ' Step 1: Strip leading sequential numbering (e.g. "001.", "22)", "(3)", "7.")
+    ' Skip any leading digits, spaces, dots, opening/closing parens until we
+    ' hit a letter — then take the rest from that position onward.
+    startPos = 1
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch Like "[A-Za-z]" Then
+            startPos = i
+            Exit For
+        ElseIf ch Like "[0-9 .()]" Then
+            ' Still in the numbering prefix — keep skipping
+        Else
+            ' Hit a non-numbering, non-letter character — stop stripping
+            startPos = i
+            Exit For
+        End If
+    Next i
+    ' If the entire string was numbering/digits, keep it all
+    If i > Len(s) Then startPos = 1
+    s = Mid$(s, startPos)
+
+    ' Step 2: Remove punctuation — keep only letters, digits, and spaces
     result = ""
     For i = 1 To Len(s)
         ch = Mid$(s, i, 1)
-        ' Keep only letters, digits, and spaces
         If ch Like "[A-Za-z0-9 ]" Then
             result = result & ch
         End If
     Next i
 
-    ' Collapse multiple spaces into one
+    ' Step 3: Collapse multiple spaces into one
     Do While InStr(result, "  ") > 0
         result = Replace(result, "  ", " ")
     Loop
 
-    ' Trim and lowercase
+    ' Step 4 & 5: Trim and lowercase
     CleanString = LCase$(Trim$(result))
 End Function
 
 ' ---------------------------------------------------------------------------
-' CharBagSimilarity — character-frequency-based similarity in [0, 1]
-'   confidence = (2 * common_chars) / (len(A) + len(B))
+' CharBagSimilarity — character-frequency similarity in [0, 1]
+'   score = (2 * common_chars) / (len(A) + len(B))
 ' ---------------------------------------------------------------------------
 Private Function CharBagSimilarity(ByVal a As String, ByVal b As String) As Double
-    Dim freqA() As Long
-    Dim freqB() As Long
+    Dim freqA(0 To 255) As Long
+    Dim freqB(0 To 255) As Long
     Dim i As Long
     Dim c As Long
     Dim commonChars As Long
@@ -53,10 +75,6 @@ Private Function CharBagSimilarity(ByVal a As String, ByVal b As String) As Doub
         CharBagSimilarity = 0#
         Exit Function
     End If
-
-    ' Use a 256-element array to cover all byte values
-    ReDim freqA(0 To 255)
-    ReDim freqB(0 To 255)
 
     For i = 1 To Len(a)
         c = Asc(Mid$(a, i, 1))
@@ -70,12 +88,10 @@ Private Function CharBagSimilarity(ByVal a As String, ByVal b As String) As Doub
 
     commonChars = 0
     For i = 0 To 255
-        If freqA(i) > 0 And freqB(i) > 0 Then
-            If freqA(i) < freqB(i) Then
-                commonChars = commonChars + freqA(i)
-            Else
-                commonChars = commonChars + freqB(i)
-            End If
+        If freqA(i) < freqB(i) Then
+            commonChars = commonChars + freqA(i)
+        Else
+            commonChars = commonChars + freqB(i)
         End If
     Next i
 
@@ -89,17 +105,17 @@ Private Sub ApplyConfidenceColour(ByVal cell As Range, ByVal confidence As Doubl
     With cell.Interior
         Select Case True
             Case confidence >= 0.95
-                .Color = RGB(0, 128, 0)       ' Dark green — near-exact
+                .Color = RGB(0, 128, 0)       ' Dark green  — near-exact
             Case confidence >= 0.8
-                .Color = RGB(0, 176, 80)       ' Green — strong
+                .Color = RGB(0, 176, 80)       ' Green       — strong
             Case confidence >= 0.6
                 .Color = RGB(146, 208, 80)     ' Yellow-green — moderate
             Case confidence >= 0.4
-                .Color = RGB(255, 255, 0)       ' Yellow — weak
+                .Color = RGB(255, 255, 0)       ' Yellow      — weak
             Case confidence >= 0.2
-                .Color = RGB(255, 165, 0)       ' Orange — very weak
+                .Color = RGB(255, 165, 0)       ' Orange      — very weak
             Case Else
-                .Color = RGB(255, 0, 0)         ' Red — no meaningful match
+                .Color = RGB(255, 0, 0)         ' Red         — no match
         End Select
     End With
 End Sub
@@ -118,7 +134,9 @@ Public Sub FuzzyListCompare()
     Dim ws As Worksheet
     Set ws = ActiveSheet
 
-    ' ---- Detect used columns ----
+    ' ==================================================================
+    ' 1. DETECT LIST COLUMNS
+    ' ==================================================================
     Dim lastCol As Long
     lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
 
@@ -127,9 +145,8 @@ Public Sub FuzzyListCompare()
         GoTo Cleanup
     End If
 
-    ' Determine which columns actually have a header in row 1
     Dim numLists As Long
-    Dim colIndices() As Long   ' 1-based column numbers of valid lists
+    Dim colIndices() As Long
     Dim colHeaders() As String
     Dim tempCount As Long
 
@@ -148,7 +165,7 @@ Public Sub FuzzyListCompare()
     numLists = tempCount
 
     If numLists < 2 Then
-        MsgBox "At least 2 lists (columns with headers) are needed for comparison. " & _
+        MsgBox "Need at least 2 lists (columns with headers) to compare. " & _
                "Found " & numLists & ".", vbExclamation
         GoTo Cleanup
     End If
@@ -156,35 +173,32 @@ Public Sub FuzzyListCompare()
     ReDim Preserve colIndices(1 To numLists)
     ReDim Preserve colHeaders(1 To numLists)
 
-    ' ---- Read and clean all items ----
-    ' items(listIndex, rowIndex) — 1-based for both dimensions
-    ' cleaned(listIndex, rowIndex) — cleaned versions
-    ' listSizes(listIndex) — number of items in each list
-
+    ' ==================================================================
+    ' 2. READ DATA AND CLEANED VERSIONS
+    ' ==================================================================
     Dim listSizes() As Long
     ReDim listSizes(1 To numLists)
 
     Dim maxRows As Long
     maxRows = 0
 
-    Dim ci As Long
-    For ci = 1 To numLists
+    Dim L As Long
+    For L = 1 To numLists
         Dim lr As Long
-        lr = ws.Cells(ws.Rows.Count, colIndices(ci)).End(xlUp).Row
+        lr = ws.Cells(ws.Rows.Count, colIndices(L)).End(xlUp).Row
         If lr < 2 Then
-            listSizes(ci) = 0
+            listSizes(L) = 0
         Else
-            listSizes(ci) = lr - 1  ' items start at row 2
+            listSizes(L) = lr - 1
         End If
-        If listSizes(ci) > maxRows Then maxRows = listSizes(ci)
-    Next ci
+        If listSizes(L) > maxRows Then maxRows = listSizes(L)
+    Next L
 
     If maxRows = 0 Then
         MsgBox "All lists are empty (headers only).", vbExclamation
         GoTo Cleanup
     End If
 
-    ' Store original and cleaned values
     Dim items() As String
     Dim cleaned() As String
     ReDim items(1 To numLists, 1 To maxRows)
@@ -194,161 +208,155 @@ Public Sub FuzzyListCompare()
     totalItems = 0
 
     Dim r As Long
-    For ci = 1 To numLists
-        For r = 1 To listSizes(ci)
-            items(ci, r) = CStr(ws.Cells(r + 1, colIndices(ci)).Value)
-            cleaned(ci, r) = CleanString(items(ci, r))
+    For L = 1 To numLists
+        For r = 1 To listSizes(L)
+            items(L, r) = CStr(ws.Cells(r + 1, colIndices(L)).Value)
+            cleaned(L, r) = CleanString(items(L, r))
             totalItems = totalItems + 1
         Next r
-    Next ci
+    Next L
 
-    ' ---- Compute best confidence for each cell ----
-    ' bestConf(listIndex, rowIndex)
-    Dim bestConf() As Double
-    ReDim bestConf(1 To numLists, 1 To maxRows)
+    ' ==================================================================
+    ' 3. COMPUTE BEST MATCHES (pairwise and overall)
+    ' ==================================================================
+    ' bestScore(L, r, M) — best similarity of item (L,r) vs any item in list M
+    ' bestText(L, r, M)  — original text of the best-matching item from list M
+    ' We can't use 3D dynamic arrays directly in VBA, so we flatten:
+    '   index = ((L-1)*maxRows + (r-1)) * numLists + M
+    ' But for clarity, we'll use a helper offset and two 1D arrays.
 
-    Dim ci2 As Long, r2 As Long
+    Dim arrSize As Long
+    arrSize = numLists * maxRows * numLists
+    Dim bScore() As Double
+    Dim bText() As String
+    ReDim bScore(1 To arrSize)
+    ReDim bText(1 To arrSize)
+
+    Dim M As Long, r2 As Long
     Dim conf As Double
+    Dim idx As Long
+    Dim curBest As Double
 
-    For ci = 1 To numLists
-        For r = 1 To listSizes(ci)
-            Dim best As Double
-            best = 0#
-            For ci2 = 1 To numLists
-                If ci2 <> ci Then
-                    For r2 = 1 To listSizes(ci2)
-                        conf = CharBagSimilarity(cleaned(ci, r), cleaned(ci2, r2))
-                        If conf > best Then
-                            best = conf
-                            ' Early exit if perfect match found
-                            If best >= 1# Then GoTo NextItem
-                        End If
-                    Next r2
+    For L = 1 To numLists
+        For r = 1 To listSizes(L)
+            If cleaned(L, r) <> "" Then
+                For M = 1 To numLists
+                    If M <> L Then
+                        idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
+                        curBest = 0#
+                        For r2 = 1 To listSizes(M)
+                            If cleaned(M, r2) <> "" Then
+                                conf = CharBagSimilarity(cleaned(L, r), cleaned(M, r2))
+                                If conf > curBest Then
+                                    curBest = conf
+                                    bScore(idx) = conf
+                                    bText(idx) = items(M, r2)
+                                    If conf >= 1# Then Exit For
+                                End If
+                            End If
+                        Next r2
+                    End If
+                Next M
+            End If
+        Next r
+    Next L
+
+    ' Compute best overall score and list name for each (L, r)
+    Dim bestOverallScore() As Double
+    Dim bestOverallList() As String
+    ReDim bestOverallScore(1 To numLists, 1 To maxRows)
+    ReDim bestOverallList(1 To numLists, 1 To maxRows)
+
+    For L = 1 To numLists
+        For r = 1 To listSizes(L)
+            Dim bestOS As Double
+            Dim bestOL As String
+            bestOS = 0#
+            bestOL = ""
+            For M = 1 To numLists
+                If M <> L Then
+                    idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
+                    If bScore(idx) > bestOS Then
+                        bestOS = bScore(idx)
+                        bestOL = colHeaders(M)
+                    End If
                 End If
-            Next ci2
-NextItem:
-            bestConf(ci, r) = best
+            Next M
+            bestOverallScore(L, r) = bestOS
+            bestOverallList(L, r) = bestOL
         Next r
-    Next ci
+    Next L
 
-    ' ---- Apply colours to original cells ----
-    For ci = 1 To numLists
-        For r = 1 To listSizes(ci)
-            ApplyConfidenceColour ws.Cells(r + 1, colIndices(ci)), bestConf(ci, r)
+    ' ==================================================================
+    ' 4. OUTPUT COLUMNS (row-aligned, filterable/sortable)
+    ' ==================================================================
+    ' For each list L, output a block of columns:
+    '   For each other list M: Conf(L->M), BestMatch(L->M)
+    '   Then: BestOverallConf(L), BestOverallList(L)
+
+    Dim outCol As Long
+    outCol = lastCol + 1
+
+    For L = 1 To numLists
+        ' Pairwise columns for each other list M
+        For M = 1 To numLists
+            If M <> L Then
+                ' Confidence column
+                ws.Cells(1, outCol).Value = "Conf(" & colHeaders(L) & ChrW$(8594) & colHeaders(M) & ")"
+                ws.Cells(1, outCol).Font.Bold = True
+                For r = 1 To listSizes(L)
+                    idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
+                    ws.Cells(r + 1, outCol).Value = Round(bScore(idx), 4)
+                Next r
+                outCol = outCol + 1
+
+                ' Best match text column
+                ws.Cells(1, outCol).Value = "BestMatch(" & colHeaders(L) & ChrW$(8594) & colHeaders(M) & ")"
+                ws.Cells(1, outCol).Font.Bold = True
+                For r = 1 To listSizes(L)
+                    idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
+                    ws.Cells(r + 1, outCol).Value = bText(idx)
+                Next r
+                outCol = outCol + 1
+            End If
+        Next M
+
+        ' Best overall confidence column for this list
+        ws.Cells(1, outCol).Value = "BestOverallConf(" & colHeaders(L) & ")"
+        ws.Cells(1, outCol).Font.Bold = True
+        For r = 1 To listSizes(L)
+            ws.Cells(r + 1, outCol).Value = Round(bestOverallScore(L, r), 4)
         Next r
-    Next ci
+        outCol = outCol + 1
 
-    ' ---- Build deduplicated "Unique Items" list ----
-    ' We iterate column by column, item by item. An item is added to the
-    ' unique list only if no existing unique item scores >= 0.80 against it.
-
-    ' Dynamic arrays for unique items
-    Dim uCount As Long          ' number of unique items so far
-    Dim uCleaned() As String    ' cleaned text of each unique item
-    Dim uOriginal() As String   ' display text (canonical)
-    Dim uPresence() As String   ' comma-separated header names
-    Dim uSourceCol() As Long    ' which column the canonical text came from
-
-    ' Pre-size generously
-    Dim totalMax As Long
-    totalMax = 0
-    For ci = 1 To numLists
-        totalMax = totalMax + listSizes(ci)
-    Next ci
-    If totalMax = 0 Then totalMax = 1
-
-    ReDim uCleaned(1 To totalMax)
-    ReDim uOriginal(1 To totalMax)
-    ReDim uPresence(1 To totalMax)
-    ReDim uSourceCol(1 To totalMax)
-
-    ' Track which lists each unique item appears in (bit-style with string)
-    ' We will use a boolean 2D: uInList(uniqueIndex, listIndex)
-    Dim uInList() As Boolean
-    ReDim uInList(1 To totalMax, 1 To numLists)
-
-    uCount = 0
-
-    For ci = 1 To numLists
-        For r = 1 To listSizes(ci)
-            Dim matched As Boolean
-            matched = False
-
-            Dim u As Long
-            For u = 1 To uCount
-                conf = CharBagSimilarity(cleaned(ci, r), uCleaned(u))
-                If conf >= 0.8 Then
-                    ' This item matches an existing unique item
-                    matched = True
-                    uInList(u, ci) = True
-                    Exit For
-                End If
-            Next u
-
-            If Not matched Then
-                ' New unique item
-                uCount = uCount + 1
-                uCleaned(uCount) = cleaned(ci, r)
-                uOriginal(uCount) = items(ci, r)
-                uSourceCol(uCount) = ci
-                uInList(uCount, ci) = True
-            End If
+        ' Best overall list column for this list
+        ws.Cells(1, outCol).Value = "BestOverallList(" & colHeaders(L) & ")"
+        ws.Cells(1, outCol).Font.Bold = True
+        For r = 1 To listSizes(L)
+            ws.Cells(r + 1, outCol).Value = bestOverallList(L, r)
         Next r
-    Next ci
+        outCol = outCol + 1
+    Next L
 
-    ' ---- Write "Unique Items" and "Present In" columns ----
-    Dim uniqueCol As Long
-    uniqueCol = lastCol + 1
-    Dim presentCol As Long
-    presentCol = lastCol + 2
+    ' ==================================================================
+    ' 5. COLOUR-CODE ORIGINAL CELLS BY BEST OVERALL CONFIDENCE
+    ' ==================================================================
+    For L = 1 To numLists
+        For r = 1 To listSizes(L)
+            ApplyConfidenceColour ws.Cells(r + 1, colIndices(L)), bestOverallScore(L, r)
+        Next r
+    Next L
 
-    ws.Cells(1, uniqueCol).Value = "Unique Items"
-    ws.Cells(1, presentCol).Value = "Present In"
-
-    ' Make headers bold
-    ws.Cells(1, uniqueCol).Font.Bold = True
-    ws.Cells(1, presentCol).Font.Bold = True
-
-    For u = 1 To uCount
-        ' Write the canonical text
-        ws.Cells(u + 1, uniqueCol).Value = uOriginal(u)
-
-        ' Build "Present In" string and count how many lists
-        Dim presenceStr As String
-        Dim presenceCount As Long
-        presenceStr = ""
-        presenceCount = 0
-
-        For ci = 1 To numLists
-            If uInList(u, ci) Then
-                presenceCount = presenceCount + 1
-                If presenceStr <> "" Then presenceStr = presenceStr & ", "
-                presenceStr = presenceStr & colHeaders(ci)
-            End If
-        Next ci
-
-        ws.Cells(u + 1, presentCol).Value = presenceStr
-
-        ' Colour-code the Unique Items cell by presence count
-        With ws.Cells(u + 1, uniqueCol).Interior
-            If presenceCount = numLists Then
-                .Color = RGB(0, 128, 0)         ' Dark green — all lists
-            ElseIf presenceCount > numLists / 2 Then
-                .Color = RGB(146, 208, 80)       ' Yellow-green — most lists
-            Else
-                .Color = RGB(255, 0, 0)           ' Red — one list only
-            End If
-        End With
-    Next u
-
-    ' ---- Done ----
+    ' ==================================================================
+    ' 6. DONE
+    ' ==================================================================
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
 
     MsgBox "Done!" & vbCrLf & vbCrLf & _
            "Lists compared: " & numLists & vbCrLf & _
-           "Total items processed: " & totalItems & vbCrLf & _
-           "Unique items found: " & uCount, vbInformation, "FuzzyListCompare"
+           "Total items processed: " & totalItems, _
+           vbInformation, "FuzzyListCompare"
     Exit Sub
 
 ErrHandler:
@@ -357,6 +365,7 @@ ErrHandler:
     MsgBox "An error occurred:" & vbCrLf & vbCrLf & _
            "Error " & Err.Number & ": " & Err.Description & vbCrLf & _
            "In procedure FuzzyListCompare", vbCritical, "FuzzyListCompare Error"
+    Exit Sub
 
 Cleanup:
     Application.ScreenUpdating = True
