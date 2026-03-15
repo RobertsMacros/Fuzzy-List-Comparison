@@ -2,7 +2,7 @@ Attribute VB_Name = "FuzzyListCompare"
 Option Explicit
 
 ' =============================================================================
-' FuzzyListCompare — Row-wise Fuzzy Duplicate Finder
+' FuzzyListCompare - Row-wise Fuzzy Duplicate Finder
 ' =============================================================================
 ' For each item in each list column, finds the best fuzzy match in every other
 ' list. Outputs pairwise confidence scores and matched text as new columns
@@ -11,7 +11,7 @@ Option Explicit
 ' =============================================================================
 
 ' ---------------------------------------------------------------------------
-' CleanString — strip leading numbering, punctuation, collapse spaces, lowercase
+' CleanString - strip leading numbering, punctuation, collapse spaces, lowercase
 ' ---------------------------------------------------------------------------
 Private Function CleanString(ByVal s As String) As String
     Dim i As Long
@@ -21,7 +21,7 @@ Private Function CleanString(ByVal s As String) As String
 
     ' Step 1: Strip leading sequential numbering (e.g. "001.", "22)", "(3)", "7.")
     ' Skip any leading digits, spaces, dots, opening/closing parens until we
-    ' hit a letter — then take the rest from that position onward.
+    ' hit a letter - then take the rest from that position onward.
     startPos = 1
     For i = 1 To Len(s)
         ch = Mid$(s, i, 1)
@@ -29,9 +29,9 @@ Private Function CleanString(ByVal s As String) As String
             startPos = i
             Exit For
         ElseIf ch Like "[0-9 .()]" Then
-            ' Still in the numbering prefix — keep skipping
+            ' Still in the numbering prefix - keep skipping
         Else
-            ' Hit a non-numbering, non-letter character — stop stripping
+            ' Hit a non-numbering, non-letter character - stop stripping
             startPos = i
             Exit For
         End If
@@ -40,7 +40,7 @@ Private Function CleanString(ByVal s As String) As String
     If i > Len(s) Then startPos = 1
     s = Mid$(s, startPos)
 
-    ' Step 2: Remove punctuation — keep only letters, digits, and spaces
+    ' Step 2: Remove punctuation - keep only letters, digits, and spaces
     result = ""
     For i = 1 To Len(s)
         ch = Mid$(s, i, 1)
@@ -59,7 +59,7 @@ Private Function CleanString(ByVal s As String) As String
 End Function
 
 ' ---------------------------------------------------------------------------
-' CharBagSimilarity — character-frequency similarity in [0, 1]
+' CharBagSimilarity - character-frequency similarity in [0, 1]
 '   score = (2 * common_chars) / (len(A) + len(B))
 ' ---------------------------------------------------------------------------
 Private Function CharBagSimilarity(ByVal a As String, ByVal b As String) As Double
@@ -99,29 +99,29 @@ Private Function CharBagSimilarity(ByVal a As String, ByVal b As String) As Doub
 End Function
 
 ' ---------------------------------------------------------------------------
-' ApplyConfidenceColour — set cell fill based on confidence score
+' ApplyConfidenceColour - set cell fill based on confidence score
 ' ---------------------------------------------------------------------------
 Private Sub ApplyConfidenceColour(ByVal cell As Range, ByVal confidence As Double)
     With cell.Interior
         Select Case True
             Case confidence >= 0.95
-                .Color = RGB(0, 128, 0)       ' Dark green  — near-exact
+                .Color = RGB(0, 128, 0)       ' Dark green  - near-exact
             Case confidence >= 0.8
-                .Color = RGB(0, 176, 80)       ' Green       — strong
+                .Color = RGB(0, 176, 80)       ' Green       - strong
             Case confidence >= 0.6
-                .Color = RGB(146, 208, 80)     ' Yellow-green — moderate
+                .Color = RGB(146, 208, 80)     ' Yellow-green - moderate
             Case confidence >= 0.4
-                .Color = RGB(255, 255, 0)       ' Yellow      — weak
+                .Color = RGB(255, 255, 0)       ' Yellow      - weak
             Case confidence >= 0.2
-                .Color = RGB(255, 165, 0)       ' Orange      — very weak
+                .Color = RGB(255, 165, 0)       ' Orange      - very weak
             Case Else
-                .Color = RGB(255, 0, 0)         ' Red         — no match
+                .Color = RGB(255, 0, 0)         ' Red         - no match
         End Select
     End With
 End Sub
 
 ' ---------------------------------------------------------------------------
-' FuzzyListCompare — main entry point
+' FuzzyListCompare - main entry point
 ' ---------------------------------------------------------------------------
 Public Sub FuzzyListCompare()
 
@@ -219,8 +219,8 @@ Public Sub FuzzyListCompare()
     ' ==================================================================
     ' 3. COMPUTE BEST MATCHES (pairwise and overall)
     ' ==================================================================
-    ' bestScore(L, r, M) — best similarity of item (L,r) vs any item in list M
-    ' bestText(L, r, M)  — original text of the best-matching item from list M
+    ' bestScore(L, r, M) - best similarity of item (L,r) vs any item in list M
+    ' bestText(L, r, M)  - original text of the best-matching item from list M
     ' We can't use 3D dynamic arrays directly in VBA, so we flatten:
     '   index = ((L-1)*maxRows + (r-1)) * numLists + M
     ' But for clarity, we'll use a helper offset and two 1D arrays.
@@ -302,7 +302,7 @@ Public Sub FuzzyListCompare()
         For M = 1 To numLists
             If M <> L Then
                 ' Confidence column
-                ws.Cells(1, outCol).Value = "Conf(" & colHeaders(L) & ChrW$(8594) & colHeaders(M) & ")"
+                ws.Cells(1, outCol).Value = "Conf(" & colHeaders(L) & "->" & colHeaders(M) & ")"
                 ws.Cells(1, outCol).Font.Bold = True
                 For r = 1 To listSizes(L)
                     idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
@@ -311,7 +311,7 @@ Public Sub FuzzyListCompare()
                 outCol = outCol + 1
 
                 ' Best match text column
-                ws.Cells(1, outCol).Value = "BestMatch(" & colHeaders(L) & ChrW$(8594) & colHeaders(M) & ")"
+                ws.Cells(1, outCol).Value = "BestMatch(" & colHeaders(L) & "->" & colHeaders(M) & ")"
                 ws.Cells(1, outCol).Font.Bold = True
                 For r = 1 To listSizes(L)
                     idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
