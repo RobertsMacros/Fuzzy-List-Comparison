@@ -2,12 +2,11 @@ Attribute VB_Name = "FuzzyListCompare"
 Option Explicit
 
 ' =============================================================================
-' FuzzyListCompare - Row-wise Fuzzy Duplicate Finder
+' FuzzyListCompare - Sheet-Based Pairwise Fuzzy Duplicate Comparison
 ' =============================================================================
-' For each item in each list column, finds the best fuzzy match in every other
-' list. Outputs pairwise confidence scores and matched text as new columns
-' aligned row-by-row with the original data, making it easy to filter and sort.
-' Original cells are colour-coded by their best overall match confidence.
+' Compares two user-selected lists for fuzzy duplicates. Results go on a new
+' dedicated sheet sorted by match confidence, with "missing" sections at the
+' bottom. The original sheet is never modified.
 ' =============================================================================
 
 ' ---------------------------------------------------------------------------
@@ -18,29 +17,32 @@ Private Function CleanString(ByVal s As String) As String
     Dim ch As String
     Dim result As String
     Dim startPos As Long
+    Dim foundLetter As Boolean
 
-    ' Step 1: Strip leading sequential numbering (e.g. "001.", "22)", "(3)", "7.")
-    ' Skip any leading digits, spaces, dots, opening/closing parens until we
-    ' hit a letter - then take the rest from that position onward.
+    ' Step 1: Strip leading sequential numbering
+    ' Skip digits, spaces, dots, parens, hyphens until the first letter.
     startPos = 1
+    foundLetter = False
     For i = 1 To Len(s)
         ch = Mid$(s, i, 1)
         If ch Like "[A-Za-z]" Then
             startPos = i
+            foundLetter = True
             Exit For
-        ElseIf ch Like "[0-9 .()]" Then
-            ' Still in the numbering prefix - keep skipping
+        ElseIf ch Like "[0-9 .()-]" Then
+            ' Still in numbering prefix - keep skipping
         Else
-            ' Hit a non-numbering, non-letter character - stop stripping
+            ' Non-numbering, non-letter char - stop stripping
             startPos = i
+            foundLetter = True
             Exit For
         End If
     Next i
-    ' If the entire string was numbering/digits, keep it all
-    If i > Len(s) Then startPos = 1
+    ' If no letters found at all, keep the original string
+    If Not foundLetter Then startPos = 1
     s = Mid$(s, startPos)
 
-    ' Step 2: Remove punctuation - keep only letters, digits, and spaces
+    ' Step 2: Keep only letters, digits, and spaces
     result = ""
     For i = 1 To Len(s)
         ch = Mid$(s, i, 1)
@@ -49,7 +51,7 @@ Private Function CleanString(ByVal s As String) As String
         End If
     Next i
 
-    ' Step 3: Collapse multiple spaces into one
+    ' Step 3: Collapse multiple spaces
     Do While InStr(result, "  ") > 0
         result = Replace(result, "  ", " ")
     Loop
@@ -60,7 +62,6 @@ End Function
 
 ' ---------------------------------------------------------------------------
 ' CharBagSimilarity - character-frequency similarity in [0, 1]
-'   score = (2 * common_chars) / (len(A) + len(B))
 ' ---------------------------------------------------------------------------
 Private Function CharBagSimilarity(ByVal a As String, ByVal b As String) As Double
     Dim freqA(0 To 255) As Long
@@ -127,18 +128,17 @@ Public Sub FuzzyListCompare()
 
     On Error GoTo ErrHandler
 
-    ' ---- Performance switches ----
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
 
-    Dim ws As Worksheet
-    Set ws = ActiveSheet
+    Dim sourceWs As Worksheet
+    Set sourceWs = ActiveSheet
 
     ' ==================================================================
-    ' 1. DETECT LIST COLUMNS
+    ' 1. DETECT LIST COLUMNS on the source sheet
     ' ==================================================================
     Dim lastCol As Long
-    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    lastCol = sourceWs.Cells(1, sourceWs.Columns.Count).End(xlToLeft).Column
 
     If lastCol < 1 Then
         MsgBox "No data found on the active sheet.", vbExclamation
@@ -149,17 +149,17 @@ Public Sub FuzzyListCompare()
     Dim colIndices() As Long
     Dim colHeaders() As String
     Dim tempCount As Long
+    Dim c As Long
 
     tempCount = 0
     ReDim colIndices(1 To lastCol)
     ReDim colHeaders(1 To lastCol)
 
-    Dim c As Long
     For c = 1 To lastCol
-        If Trim$(CStr(ws.Cells(1, c).Value)) <> "" Then
+        If Trim$(CStr(sourceWs.Cells(1, c).Value)) <> "" Then
             tempCount = tempCount + 1
             colIndices(tempCount) = c
-            colHeaders(tempCount) = CStr(ws.Cells(1, c).Value)
+            colHeaders(tempCount) = CStr(sourceWs.Cells(1, c).Value)
         End If
     Next c
     numLists = tempCount
@@ -174,188 +174,324 @@ Public Sub FuzzyListCompare()
     ReDim Preserve colHeaders(1 To numLists)
 
     ' ==================================================================
-    ' 2. READ DATA AND CLEANED VERSIONS
+    ' 2. USER INPUT - pick primary, secondary, and threshold
     ' ==================================================================
-    Dim listSizes() As Long
-    ReDim listSizes(1 To numLists)
 
-    Dim maxRows As Long
-    maxRows = 0
+    ' Step 1: Show detected lists
+    Dim listMsg As String
+    Dim n As Long
+    listMsg = "The following lists were found:" & vbCrLf & vbCrLf
+    For n = 1 To numLists
+        listMsg = listMsg & n & " - " & colHeaders(n) & vbCrLf
+    Next n
+    listMsg = listMsg & vbCrLf & "Press OK to continue."
+    MsgBox listMsg, vbInformation, "FuzzyListCompare - Detected Lists"
 
-    Dim L As Long
-    For L = 1 To numLists
-        Dim lr As Long
-        lr = ws.Cells(ws.Rows.Count, colIndices(L)).End(xlUp).Row
-        If lr < 2 Then
-            listSizes(L) = 0
-        Else
-            listSizes(L) = lr - 1
+    ' Step 2: Get primary list number
+    Dim primaryIdx As Long
+    Dim inputStr As String
+    Do
+        inputStr = InputBox("Enter the number of the PRIMARY list (the list you want to check):" & _
+                            vbCrLf & vbCrLf & "Enter a number from 1 to " & numLists & ".", _
+                            "FuzzyListCompare - Primary List")
+        If StrPtr(inputStr) = 0 Then
+            ' User pressed Cancel
+            GoTo Cleanup
         End If
-        If listSizes(L) > maxRows Then maxRows = listSizes(L)
-    Next L
+        If IsNumeric(inputStr) Then
+            primaryIdx = CLng(inputStr)
+            If primaryIdx >= 1 And primaryIdx <= numLists Then Exit Do
+        End If
+        MsgBox "Invalid input. Please enter a number between 1 and " & numLists & ".", vbExclamation
+    Loop
 
-    If maxRows = 0 Then
-        MsgBox "All lists are empty (headers only).", vbExclamation
+    ' Step 3: Get secondary list number
+    Dim secondaryIdx As Long
+    Do
+        inputStr = InputBox("Enter the number of the SECONDARY list (the list to check against):" & _
+                            vbCrLf & vbCrLf & "Enter a number from 1 to " & numLists & _
+                            " (not " & primaryIdx & ").", _
+                            "FuzzyListCompare - Secondary List")
+        If StrPtr(inputStr) = 0 Then GoTo Cleanup
+        If IsNumeric(inputStr) Then
+            secondaryIdx = CLng(inputStr)
+            If secondaryIdx >= 1 And secondaryIdx <= numLists And secondaryIdx <> primaryIdx Then Exit Do
+        End If
+        MsgBox "Invalid input. Please enter a number between 1 and " & numLists & _
+               ", different from " & primaryIdx & ".", vbExclamation
+    Loop
+
+    ' Step 4: Get confidence threshold
+    Dim matchThreshold As Double
+    matchThreshold = 0.7
+    inputStr = InputBox("Enter the confidence threshold for a 'match' (e.g. 0.7 for 70%):" & _
+                        vbCrLf & vbCrLf & "Default: 0.7", _
+                        "FuzzyListCompare - Threshold", "0.7")
+    If StrPtr(inputStr) <> 0 And inputStr <> "" Then
+        If IsNumeric(inputStr) Then
+            Dim tempThresh As Double
+            tempThresh = CDbl(inputStr)
+            If tempThresh >= 0 And tempThresh <= 1 Then
+                matchThreshold = tempThresh
+            End If
+        End If
+    End If
+
+    ' ==================================================================
+    ' 3. READ DATA from the source sheet
+    ' ==================================================================
+    Dim primaryCount As Long
+    Dim secondaryCount As Long
+    Dim lr As Long
+
+    ' Primary list
+    lr = sourceWs.Cells(sourceWs.Rows.Count, colIndices(primaryIdx)).End(xlUp).Row
+    If lr < 2 Then
+        primaryCount = 0
+    Else
+        primaryCount = lr - 1
+    End If
+
+    ' Secondary list
+    lr = sourceWs.Cells(sourceWs.Rows.Count, colIndices(secondaryIdx)).End(xlUp).Row
+    If lr < 2 Then
+        secondaryCount = 0
+    Else
+        secondaryCount = lr - 1
+    End If
+
+    If primaryCount = 0 Then
+        MsgBox "The primary list (" & colHeaders(primaryIdx) & ") is empty.", vbExclamation
+        GoTo Cleanup
+    End If
+    If secondaryCount = 0 Then
+        MsgBox "The secondary list (" & colHeaders(secondaryIdx) & ") is empty.", vbExclamation
         GoTo Cleanup
     End If
 
-    Dim items() As String
-    Dim cleaned() As String
-    ReDim items(1 To numLists, 1 To maxRows)
-    ReDim cleaned(1 To numLists, 1 To maxRows)
+    Dim primaryItems() As String
+    Dim primaryCleaned() As String
+    Dim secondaryItems() As String
+    Dim secondaryCleaned() As String
+    ReDim primaryItems(1 To primaryCount)
+    ReDim primaryCleaned(1 To primaryCount)
+    ReDim secondaryItems(1 To secondaryCount)
+    ReDim secondaryCleaned(1 To secondaryCount)
 
-    Dim totalItems As Long
-    totalItems = 0
+    Dim i As Long
+    For i = 1 To primaryCount
+        primaryItems(i) = CStr(sourceWs.Cells(i + 1, colIndices(primaryIdx)).Value)
+        primaryCleaned(i) = CleanString(primaryItems(i))
+    Next i
 
-    Dim r As Long
-    For L = 1 To numLists
-        For r = 1 To listSizes(L)
-            items(L, r) = CStr(ws.Cells(r + 1, colIndices(L)).Value)
-            cleaned(L, r) = CleanString(items(L, r))
-            totalItems = totalItems + 1
-        Next r
-    Next L
+    For i = 1 To secondaryCount
+        secondaryItems(i) = CStr(sourceWs.Cells(i + 1, colIndices(secondaryIdx)).Value)
+        secondaryCleaned(i) = CleanString(secondaryItems(i))
+    Next i
 
     ' ==================================================================
-    ' 3. COMPUTE BEST MATCHES (pairwise and overall)
+    ' 4. COMPUTE MATCHES
     ' ==================================================================
-    ' bestScore(L, r, M) - best similarity of item (L,r) vs any item in list M
-    ' bestText(L, r, M)  - original text of the best-matching item from list M
-    ' We can't use 3D dynamic arrays directly in VBA, so we flatten:
-    '   index = ((L-1)*maxRows + (r-1)) * numLists + M
-    ' But for clarity, we'll use a helper offset and two 1D arrays.
+    Dim bestMatchScore() As Double
+    Dim bestMatchIdx() As Long
+    Dim bestMatchText() As String
+    Dim secondaryMatched() As Boolean
 
-    Dim arrSize As Long
-    arrSize = numLists * maxRows * numLists
-    Dim bScore() As Double
-    Dim bText() As String
-    ReDim bScore(1 To arrSize)
-    ReDim bText(1 To arrSize)
+    ReDim bestMatchScore(1 To primaryCount)
+    ReDim bestMatchIdx(1 To primaryCount)
+    ReDim bestMatchText(1 To primaryCount)
+    ReDim secondaryMatched(1 To secondaryCount)
 
-    Dim M As Long, r2 As Long
+    Dim j As Long
     Dim conf As Double
-    Dim idx As Long
-    Dim curBest As Double
 
-    For L = 1 To numLists
-        For r = 1 To listSizes(L)
-            If cleaned(L, r) <> "" Then
-                For M = 1 To numLists
-                    If M <> L Then
-                        idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
-                        curBest = 0#
-                        For r2 = 1 To listSizes(M)
-                            If cleaned(M, r2) <> "" Then
-                                conf = CharBagSimilarity(cleaned(L, r), cleaned(M, r2))
-                                If conf > curBest Then
-                                    curBest = conf
-                                    bScore(idx) = conf
-                                    bText(idx) = items(M, r2)
-                                    If conf >= 1# Then Exit For
-                                End If
-                            End If
-                        Next r2
-                    End If
-                Next M
-            End If
-        Next r
-    Next L
+    For i = 1 To primaryCount
+        bestMatchScore(i) = 0#
+        bestMatchIdx(i) = 0
+        bestMatchText(i) = ""
 
-    ' Compute best overall score and list name for each (L, r)
-    Dim bestOverallScore() As Double
-    Dim bestOverallList() As String
-    ReDim bestOverallScore(1 To numLists, 1 To maxRows)
-    ReDim bestOverallList(1 To numLists, 1 To maxRows)
-
-    For L = 1 To numLists
-        For r = 1 To listSizes(L)
-            Dim bestOS As Double
-            Dim bestOL As String
-            bestOS = 0#
-            bestOL = ""
-            For M = 1 To numLists
-                If M <> L Then
-                    idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
-                    If bScore(idx) > bestOS Then
-                        bestOS = bScore(idx)
-                        bestOL = colHeaders(M)
+        If primaryCleaned(i) <> "" Then
+            For j = 1 To secondaryCount
+                If secondaryCleaned(j) <> "" Then
+                    conf = CharBagSimilarity(primaryCleaned(i), secondaryCleaned(j))
+                    If conf > bestMatchScore(i) Then
+                        bestMatchScore(i) = conf
+                        bestMatchIdx(i) = j
+                        bestMatchText(i) = secondaryItems(j)
+                        If conf >= 1# Then Exit For
                     End If
                 End If
-            Next M
-            bestOverallScore(L, r) = bestOS
-            bestOverallList(L, r) = bestOL
-        Next r
-    Next L
+            Next j
+        End If
+
+        ' Mark secondary item as matched if above threshold
+        If bestMatchScore(i) >= matchThreshold And bestMatchIdx(i) > 0 Then
+            secondaryMatched(bestMatchIdx(i)) = True
+        End If
+    Next i
 
     ' ==================================================================
-    ' 4. OUTPUT COLUMNS (row-aligned, filterable/sortable)
+    ' 5. SORT primary items by bestMatchScore DESCENDING
     ' ==================================================================
-    ' For each list L, output a block of columns:
-    '   For each other list M: Conf(L->M), BestMatch(L->M)
-    '   Then: BestOverallConf(L), BestOverallList(L)
+    Dim sortOrder() As Long
+    ReDim sortOrder(1 To primaryCount)
+    For i = 1 To primaryCount
+        sortOrder(i) = i
+    Next i
 
-    Dim outCol As Long
-    outCol = lastCol + 1
-
-    For L = 1 To numLists
-        ' Pairwise columns for each other list M
-        For M = 1 To numLists
-            If M <> L Then
-                ' Confidence column
-                ws.Cells(1, outCol).Value = "Conf(" & colHeaders(L) & "->" & colHeaders(M) & ")"
-                ws.Cells(1, outCol).Font.Bold = True
-                For r = 1 To listSizes(L)
-                    idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
-                    ws.Cells(r + 1, outCol).Value = Round(bScore(idx), 4)
-                Next r
-                outCol = outCol + 1
-
-                ' Best match text column
-                ws.Cells(1, outCol).Value = "BestMatch(" & colHeaders(L) & "->" & colHeaders(M) & ")"
-                ws.Cells(1, outCol).Font.Bold = True
-                For r = 1 To listSizes(L)
-                    idx = ((L - 1) * maxRows + (r - 1)) * numLists + M
-                    ws.Cells(r + 1, outCol).Value = bText(idx)
-                Next r
-                outCol = outCol + 1
+    ' Simple bubble sort (descending by score)
+    Dim swapped As Boolean
+    Dim tempLong As Long
+    Dim k As Long
+    Do
+        swapped = False
+        For k = 1 To primaryCount - 1
+            If bestMatchScore(sortOrder(k)) < bestMatchScore(sortOrder(k + 1)) Then
+                tempLong = sortOrder(k)
+                sortOrder(k) = sortOrder(k + 1)
+                sortOrder(k + 1) = tempLong
+                swapped = True
             End If
-        Next M
-
-        ' Best overall confidence column for this list
-        ws.Cells(1, outCol).Value = "BestOverallConf(" & colHeaders(L) & ")"
-        ws.Cells(1, outCol).Font.Bold = True
-        For r = 1 To listSizes(L)
-            ws.Cells(r + 1, outCol).Value = Round(bestOverallScore(L, r), 4)
-        Next r
-        outCol = outCol + 1
-
-        ' Best overall list column for this list
-        ws.Cells(1, outCol).Value = "BestOverallList(" & colHeaders(L) & ")"
-        ws.Cells(1, outCol).Font.Bold = True
-        For r = 1 To listSizes(L)
-            ws.Cells(r + 1, outCol).Value = bestOverallList(L, r)
-        Next r
-        outCol = outCol + 1
-    Next L
+        Next k
+    Loop While swapped
 
     ' ==================================================================
-    ' 5. COLOUR-CODE ORIGINAL CELLS BY BEST OVERALL CONFIDENCE
+    ' 6. CREATE NEW RESULTS SHEET
     ' ==================================================================
-    For L = 1 To numLists
-        For r = 1 To listSizes(L)
-            ApplyConfidenceColour ws.Cells(r + 1, colIndices(L)), bestOverallScore(L, r)
-        Next r
-    Next L
+    Dim sheetName As String
+    sheetName = colHeaders(primaryIdx) & " vs " & colHeaders(secondaryIdx)
+    ' Excel sheet names max 31 chars
+    If Len(sheetName) > 31 Then sheetName = Left$(sheetName, 31)
+
+    ' If sheet name already exists, append a number
+    Dim nameOk As Boolean
+    Dim nameBase As String
+    Dim nameNum As Long
+    Dim wsCheck As Worksheet
+    nameBase = sheetName
+    nameNum = 1
+    Do
+        nameOk = True
+        For Each wsCheck In ThisWorkbook.Worksheets
+            If LCase$(wsCheck.Name) = LCase$(sheetName) Then
+                nameOk = False
+                nameNum = nameNum + 1
+                sheetName = Left$(nameBase, 31 - Len(CStr(nameNum)) - 1) & " " & nameNum
+                Exit For
+            End If
+        Next wsCheck
+    Loop Until nameOk
+
+    Dim resultsWs As Worksheet
+    Set resultsWs = ThisWorkbook.Worksheets.Add(After:=sourceWs)
+    resultsWs.Name = sheetName
 
     ' ==================================================================
-    ' 6. DONE
+    ' 7. WRITE RESULTS on the new sheet
+    ' ==================================================================
+    Dim row As Long
+
+    ' --- Title row ---
+    resultsWs.Range("A1").Value = "Comparison: " & colHeaders(primaryIdx) & _
+                                  " checked against " & colHeaders(secondaryIdx) & _
+                                  " | Threshold: " & Format$(matchThreshold * 100, "0") & "%"
+    With resultsWs.Range("A1:C1")
+        .Merge
+        .Font.Bold = True
+        .Font.Size = 13
+    End With
+
+    ' Row 2: blank spacer
+
+    ' --- Column headers in row 3 ---
+    resultsWs.Cells(3, 1).Value = colHeaders(primaryIdx)
+    resultsWs.Cells(3, 2).Value = "Confidence"
+    resultsWs.Cells(3, 3).Value = "Best Match from " & colHeaders(secondaryIdx)
+    resultsWs.Range("A3:C3").Font.Bold = True
+
+    ' --- Data rows (sorted by confidence descending) ---
+    For k = 1 To primaryCount
+        i = sortOrder(k)
+        row = k + 3
+        resultsWs.Cells(row, 1).Value = primaryItems(i)
+        resultsWs.Cells(row, 2).Value = Round(bestMatchScore(i), 4)
+        If bestMatchScore(i) > 0 Then
+            resultsWs.Cells(row, 3).Value = bestMatchText(i)
+        End If
+
+        ' Colour-code the primary item cell
+        ApplyConfidenceColour resultsWs.Cells(row, 1), bestMatchScore(i)
+    Next k
+
+    ' --- "Missing from secondary" section ---
+    row = primaryCount + 3 + 2 + 1  ' 2 blank rows after data
+    resultsWs.Cells(row, 1).Value = "Items in " & colHeaders(primaryIdx) & _
+                                     " with no match in " & colHeaders(secondaryIdx) & _
+                                     " (below " & Format$(matchThreshold * 100, "0") & "%)"
+    With resultsWs.Range(resultsWs.Cells(row, 1), resultsWs.Cells(row, 3))
+        .Merge
+        .Font.Bold = True
+    End With
+    row = row + 1
+
+    For k = 1 To primaryCount
+        i = sortOrder(k)
+        If bestMatchScore(i) < matchThreshold Then
+            resultsWs.Cells(row, 1).Value = primaryItems(i)
+            resultsWs.Cells(row, 1).Interior.Color = RGB(255, 0, 0)
+            row = row + 1
+        End If
+    Next k
+
+    ' --- "Missing from primary" section ---
+    row = row + 2  ' 2 blank rows
+    resultsWs.Cells(row, 1).Value = "Items in " & colHeaders(secondaryIdx) & _
+                                     " with no match in " & colHeaders(primaryIdx) & _
+                                     " (below " & Format$(matchThreshold * 100, "0") & "%)"
+    With resultsWs.Range(resultsWs.Cells(row, 1), resultsWs.Cells(row, 3))
+        .Merge
+        .Font.Bold = True
+    End With
+    row = row + 1
+
+    For j = 1 To secondaryCount
+        If Not secondaryMatched(j) Then
+            resultsWs.Cells(row, 1).Value = secondaryItems(j)
+            resultsWs.Cells(row, 1).Interior.Color = RGB(255, 0, 0)
+            row = row + 1
+        End If
+    Next j
+
+    ' ==================================================================
+    ' 8. FORMAT THE RESULTS SHEET
+    ' ==================================================================
+    ' Auto-fit columns A, B, C
+    resultsWs.Columns("A:C").AutoFit
+
+    ' Format confidence column as percentage
+    resultsWs.Columns("B").NumberFormat = "0.00%"
+
+    ' Freeze panes at row 4 (so row 3 headers stay visible)
+    resultsWs.Activate
+    resultsWs.Cells(4, 1).Select
+    ActiveWindow.FreezePanes = True
+
+    ' Add AutoFilter to the header row (row 3)
+    resultsWs.Range("A3:C3").AutoFilter
+
+    ' Select first data cell
+    resultsWs.Cells(4, 1).Select
+
+    ' ==================================================================
+    ' 9. DONE
     ' ==================================================================
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
 
-    MsgBox "Done!" & vbCrLf & vbCrLf & _
-           "Lists compared: " & numLists & vbCrLf & _
-           "Total items processed: " & totalItems, _
+    MsgBox "Comparison complete!" & vbCrLf & vbCrLf & _
+           "Primary list: " & colHeaders(primaryIdx) & " (" & primaryCount & " items)" & vbCrLf & _
+           "Secondary list: " & colHeaders(secondaryIdx) & " (" & secondaryCount & " items)" & vbCrLf & vbCrLf & _
+           "Results are on sheet: " & resultsWs.Name, _
            vbInformation, "FuzzyListCompare"
     Exit Sub
 
