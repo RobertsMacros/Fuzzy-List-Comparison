@@ -130,12 +130,7 @@ End Sub
 ' ---------------------------------------------------------------------------
 ' RunFuzzyComparison - main comparison logic, called from the UserForm
 ' ---------------------------------------------------------------------------
-Public Sub RunFuzzyComparison(ByVal sourceWs As Worksheet, _
-                              ByVal primaryCol As Long, _
-                              ByVal secondaryCol As Long, _
-                              ByVal primaryHeader As String, _
-                              ByVal secondaryHeader As String, _
-                              ByVal matchThreshold As Double)
+Public Sub RunFuzzyComparison(ByVal sourceWs As Worksheet, ByVal primaryCol As Long, ByVal secondaryCol As Long, ByVal primaryHeader As String, ByVal secondaryHeader As String, ByVal matchThreshold As Double)
 
     On Error GoTo ErrHandler
 
@@ -285,9 +280,10 @@ Public Sub RunFuzzyComparison(ByVal sourceWs As Worksheet, _
     Dim row As Long
 
     ' --- Title row (merged A1:C1) ---
-    resultsWs.Range("A1").Value = "Comparison: " & primaryHeader & _
-                                  " checked against " & secondaryHeader & _
-                                  " | Threshold: " & Format$(matchThreshold * 100, "0") & "%"
+    Dim title As String
+    title = "Comparison: " & primaryHeader & " checked against " & secondaryHeader
+    title = title & " | Threshold: " & Format$(matchThreshold * 100, "0") & "%"
+    resultsWs.Range("A1").Value = title
     With resultsWs.Range("A1:C1")
         .Merge
         .Font.Bold = True
@@ -321,9 +317,10 @@ Public Sub RunFuzzyComparison(ByVal sourceWs As Worksheet, _
     ' --- "Missing from secondary" section ---
     row = primaryCount + 3 + 3  ' 2 blank rows after data
 
-    resultsWs.Cells(row, 1).Value = "Items in " & primaryHeader & _
-        " with no match in " & secondaryHeader & _
-        " (below " & Format$(matchThreshold * 100, "0") & "%)"
+    Dim missingHdr As String
+    missingHdr = "Items in " & primaryHeader & " with no match in " & secondaryHeader
+    missingHdr = missingHdr & " (below " & Format$(matchThreshold * 100, "0") & "%)"
+    resultsWs.Cells(row, 1).Value = missingHdr
     With resultsWs.Range(resultsWs.Cells(row, 1), resultsWs.Cells(row, 3))
         .Merge
         .Font.Bold = True
@@ -350,9 +347,9 @@ Public Sub RunFuzzyComparison(ByVal sourceWs As Worksheet, _
     ' --- "Missing from primary" section ---
     row = row + 2  ' 2 blank rows
 
-    resultsWs.Cells(row, 1).Value = "Items in " & secondaryHeader & _
-        " with no match in " & primaryHeader & _
-        " (below " & Format$(matchThreshold * 100, "0") & "%)"
+    missingHdr = "Items in " & secondaryHeader & " with no match in " & primaryHeader
+    missingHdr = missingHdr & " (below " & Format$(matchThreshold * 100, "0") & "%)"
+    resultsWs.Cells(row, 1).Value = missingHdr
     With resultsWs.Range(resultsWs.Cells(row, 1), resultsWs.Cells(row, 3))
         .Merge
         .Font.Bold = True
@@ -395,19 +392,21 @@ Public Sub RunFuzzyComparison(ByVal sourceWs As Worksheet, _
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
 
-    MsgBox "Comparison complete!" & vbCrLf & vbCrLf & _
-           "Primary list: " & primaryHeader & " (" & primaryCount & " items)" & vbCrLf & _
-           "Secondary list: " & secondaryHeader & " (" & secondaryCount & " items)" & vbCrLf & vbCrLf & _
-           "Results are on sheet: " & resultsWs.Name, _
-           vbInformation, "FuzzyListCompare"
+    Dim doneMsg As String
+    doneMsg = "Comparison complete!" & vbCrLf & vbCrLf
+    doneMsg = doneMsg & "Primary list: " & primaryHeader & " (" & primaryCount & " items)" & vbCrLf
+    doneMsg = doneMsg & "Secondary list: " & secondaryHeader & " (" & secondaryCount & " items)" & vbCrLf & vbCrLf
+    doneMsg = doneMsg & "Results are on sheet: " & resultsWs.Name
+    MsgBox doneMsg, vbInformation, "FuzzyListCompare"
     Exit Sub
 
 ErrHandler:
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
-    MsgBox "An error occurred:" & vbCrLf & vbCrLf & _
-           "Error " & Err.Number & ": " & Err.Description & vbCrLf & _
-           "In procedure RunFuzzyComparison", vbCritical, "FuzzyListCompare Error"
+    Dim errMsg As String
+    errMsg = "An error occurred:" & vbCrLf & vbCrLf
+    errMsg = errMsg & "Error " & Err.Number & ": " & Err.Description
+    MsgBox errMsg, vbCritical, "FuzzyListCompare Error"
     Exit Sub
 
 Cleanup:

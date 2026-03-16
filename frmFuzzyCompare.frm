@@ -29,32 +29,26 @@ Private Sub UserForm_Initialize()
     Set m_sourceWs = ActiveSheet
 
     ' -- Instructions --
-    txtInstructions.Value = _
-        "FUZZY LIST COMPARE" & vbCrLf & _
-        String(35, "-") & vbCrLf & vbCrLf & _
-        "Compare two lists for fuzzy duplicate matches." & vbCrLf & vbCrLf & _
-        "HOW TO USE:" & vbCrLf & _
-        "1. Select your PRIMARY list - the list you want " & _
-        "to check for duplicates." & vbCrLf & _
-        "2. Select the SECONDARY list - the list to " & _
-        "compare against." & vbCrLf & _
-        "3. Choose a confidence threshold (default 70%). " & _
-        "Items scoring at or above this are matches." & vbCrLf & _
-        "4. Click 'Run Comparison'." & vbCrLf & vbCrLf & _
-        "WHAT IT DOES:" & vbCrLf & _
-        "Creates a new results sheet with your primary " & _
-        "list sorted by match confidence (best first). " & _
-        "Each item shows its best match from the " & _
-        "secondary list and a confidence percentage." & vbCrLf & vbCrLf & _
-        "The best-match column is colour-coded:" & vbCrLf & _
-        "  Green  = strong match (80%+)" & vbCrLf & _
-        "  Yellow = moderate match (40-79%)" & vbCrLf & _
-        "  Orange/Red = weak or no match" & vbCrLf & vbCrLf & _
-        "Below the main table you will find:" & vbCrLf & _
-        "- Primary items with no good match" & vbCrLf & _
-        "- Secondary items not matched by any " & _
-        "primary item" & vbCrLf & vbCrLf & _
-        "Your original data is never modified."
+    Dim txt As String
+    txt = "FUZZY LIST COMPARE" & vbCrLf & String(35, "-") & vbCrLf & vbCrLf
+    txt = txt & "Compare two lists for fuzzy duplicate matches." & vbCrLf & vbCrLf
+    txt = txt & "HOW TO USE:" & vbCrLf
+    txt = txt & "1. Select your PRIMARY list - the list you want to check." & vbCrLf
+    txt = txt & "2. Select the SECONDARY list - the list to compare against." & vbCrLf
+    txt = txt & "3. Choose a confidence threshold (default 70%)." & vbCrLf
+    txt = txt & "4. Click 'Run Comparison'." & vbCrLf & vbCrLf
+    txt = txt & "WHAT IT DOES:" & vbCrLf
+    txt = txt & "Creates a new results sheet sorted by match confidence." & vbCrLf
+    txt = txt & "Each item shows its best match and a confidence %." & vbCrLf & vbCrLf
+    txt = txt & "The best-match column is colour-coded:" & vbCrLf
+    txt = txt & "  Green  = strong match (80%+)" & vbCrLf
+    txt = txt & "  Yellow = moderate match (40-79%)" & vbCrLf
+    txt = txt & "  Orange/Red = weak or no match" & vbCrLf & vbCrLf
+    txt = txt & "Below the main table:" & vbCrLf
+    txt = txt & "- Primary items with no good match" & vbCrLf
+    txt = txt & "- Secondary items not matched" & vbCrLf & vbCrLf
+    txt = txt & "Your original data is never modified."
+    txtInstructions.Value = txt
 
     ' -- Detect list columns --
     Dim lastCol As Long
@@ -101,8 +95,7 @@ Private Sub UserForm_Initialize()
     ' -- Disable Run if fewer than 2 lists --
     If m_numLists < 2 Then
         btnRun.Enabled = False
-        MsgBox "Need at least 2 columns with headers on the active sheet.", _
-               vbExclamation, "FuzzyListCompare"
+        MsgBox "Need at least 2 columns with headers on the active sheet.", vbExclamation, "FuzzyListCompare"
     End If
 End Sub
 
@@ -148,10 +141,7 @@ Private Sub btnRun_Click()
     ' Hide form and run comparison
     Me.Hide
 
-    RunFuzzyComparison m_sourceWs, _
-                       m_colIndices(priIdx), m_colIndices(secIdx), _
-                       m_colHeaders(priIdx), m_colHeaders(secIdx), _
-                       threshold
+    RunFuzzyComparison m_sourceWs, m_colIndices(priIdx), m_colIndices(secIdx), m_colHeaders(priIdx), m_colHeaders(secIdx), threshold
 
     Unload Me
 End Sub
