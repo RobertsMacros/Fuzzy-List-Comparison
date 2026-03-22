@@ -12,8 +12,9 @@ Option Explicit
 '   1. Open the Word document to check.
 '   2. Run the macro FindDuplicateActReferences.
 '   3. Enter Act abbreviations as CSV (e.g. "FIA,FAIS,Banks Act").
-'   4. Enter Part headings as CSV, in document order
-'      (e.g. "PART 1: INTERPRETATION, PART 2: AUTHORISATION").
+'   4. Enter Part headings separated by pipes, in document order
+'      (e.g. "PART 1: INTERPRETATION | PART 2: AUTHORISATION").
+'      Pipes are used so that headings containing commas are supported.
 '   5. The macro scans sentences within each Part range and inserts comments
 '      on duplicate references.
 ' =============================================================================
@@ -44,14 +45,16 @@ Public Sub FindDuplicateActReferences()
         Exit Sub
     End If
 
-    ' --- Step 2: Ask user for Parts CSV ---
+    ' --- Step 2: Ask user for Parts (pipe-delimited) ---
     csvInput = InputBox( _
-        "Enter Part headings separated by commas, in document order" & vbCrLf & _
-        "(e.g. PART 1: INTERPRETATION, PART 2: AUTHORISATION):", _
+        "Enter Part headings separated by | (pipe), in document order." & _
+        vbCrLf & "Pipes are used so headings may contain commas." & vbCrLf & _
+        vbCrLf & "Example:" & vbCrLf & _
+        "PART 1: INTERPRETATION | PART 2: AUTHORISATION", _
         "Act Reference Checker - Parts")
     If Len(Trim(csvInput)) = 0 Then Exit Sub
 
-    Parts_List = ParseCSVList(csvInput)
+    Parts_List = ParseCSVList(csvInput, "|")
     If Not HasItems(Parts_List) Then
         MsgBox "No valid Part headings found in input.", vbExclamation
         Exit Sub
@@ -76,18 +79,20 @@ Public Sub FindDuplicateActReferences()
 End Sub
 
 ' ---------------------------------------------------------------------------
-' ParseCSVList - split comma-separated string into a trimmed, ordered array
+' ParseCSVList - split a delimited string into a trimmed, ordered array
 ' ---------------------------------------------------------------------------
+' Delimiter defaults to comma. Pass "|" for pipe-delimited input.
 ' Returns a String array with LBound 0. If there are no valid items, returns
 ' an unallocated array (test with HasItems before using).
 ' ---------------------------------------------------------------------------
-Private Function ParseCSVList(ByVal csv As String) As String()
+Private Function ParseCSVList(ByVal csv As String, _
+        Optional ByVal delimiter As String = ",") As String()
     Dim raw() As String
     Dim result() As String
     Dim i As Long
     Dim count As Long
 
-    raw = Split(csv, ",")
+    raw = Split(csv, delimiter)
 
     ' First pass: count non-empty items
     count = 0
@@ -135,6 +140,8 @@ End Function
 ' ---------------------------------------------------------------------------
 Private Function NormaliseText(ByVal s As String) As String
     Dim result As String
+    Dim lastCh As String
+
     result = Trim(s)
 
     ' Collapse repeated spaces
@@ -145,7 +152,6 @@ Private Function NormaliseText(ByVal s As String) As String
     ' Strip trailing paragraph mark (Chr(13)) that Word appends to
     ' paragraph text - without this, comparisons would always fail
     Do While Len(result) > 0
-        Dim lastCh As String
         lastCh = Right$(result, 1)
         If lastCh = vbCr Or lastCh = vbLf Or lastCh = Chr$(7) Then
             result = Left$(result, Len(result) - 1)
@@ -171,15 +177,12 @@ Private Function BuildPartRanges( _
 
     Dim partCount As Long
     Dim i As Long
-    Dim j As Long
 
     partCount = UBound(Parts_List) - LBound(Parts_List) + 1
 
     ' --- Find each heading's paragraph position ---
-    Dim startPositions() As Long   ' document character position
-    Dim foundParas() As Paragraph  ' the matched paragraph
+    Dim startPositions() As Long
     ReDim startPositions(0 To partCount - 1)
-    ReDim foundParas(0 To partCount - 1)
 
     Dim para As Paragraph
     Dim normParaText As String
@@ -224,7 +227,6 @@ Private Function BuildPartRanges( _
             Exit Function
         End If
 
-        Set foundParas(i) = matchedPara
         startPositions(i) = matchedPara.Range.Start
     Next i
 
