@@ -5,15 +5,17 @@ Option Explicit
 ' ActReferenceChecker - Word VBA Macro
 ' =============================================================================
 ' Scans a Word document for legislative references (e.g. "Section 12 of the
-' FIA") within each document Part. Tracks first-seen references per Part and
-' adds comments to flag subsequent (duplicate) references.
+' FIA") within each user-defined document Part. Tracks first-seen references
+' per Part and adds comments to flag subsequent (duplicate) references.
 '
 ' Usage:
 '   1. Open the Word document to check.
 '   2. Run the macro FindDuplicateActReferences.
 '   3. Enter Act abbreviations as CSV (e.g. "FIA,FAIS,Banks Act").
-'   4. The macro detects Parts, scans sentences, and inserts comments on
-'      duplicate references.
+'   4. Enter Part headings as CSV, in document order
+'      (e.g. "PART 1: INTERPRETATION, PART 2: AUTHORISATION").
+'   5. The macro scans sentences within each Part range and inserts comments
+'      on duplicate references.
 ' =============================================================================
 
 ' ---------------------------------------------------------------------------
@@ -23,52 +25,65 @@ Public Sub FindDuplicateActReferences()
     Dim doc As Document
     Dim csvInput As String
     Dim Act_List() As String
-    Dim Parts_List As Collection
+    Dim Parts_List() As String
+    Dim PartRanges As Collection
     Dim i As Long
 
     Set doc = ActiveDocument
 
-    ' Step 1: Ask user for CSV input of Act names
+    ' --- Step 1: Ask user for Act CSV ---
     csvInput = InputBox( _
         "Enter Act abbreviations separated by commas" & vbCrLf & _
-        "(e.g. FIA,FAIS,Banks Act):", _
-        "Act Reference Checker")
+        "(e.g. FIA, FAIS, Banks Act):", _
+        "Act Reference Checker - Acts")
     If Len(Trim(csvInput)) = 0 Then Exit Sub
 
-    ' Step 2: Parse CSV into ordered Act_List
-    Act_List = ParseCSV(csvInput)
-    If UBound(Act_List) < 0 Then
+    Act_List = ParseCSVList(csvInput)
+    If Not HasItems(Act_List) Then
         MsgBox "No valid Act names found in input.", vbExclamation
         Exit Sub
     End If
 
-    ' Step 3: Detect document Parts
-    Set Parts_List = FindDocumentParts(doc)
-    If Parts_List.Count = 0 Then
-        MsgBox "No Parts found in the document." & vbCrLf & _
-               "The macro looks for paragraphs starting with " & _
-               """Part"" followed by a number (e.g. ""Part 1"").", _
-               vbExclamation
+    ' --- Step 2: Ask user for Parts CSV ---
+    csvInput = InputBox( _
+        "Enter Part headings separated by commas, in document order" & vbCrLf & _
+        "(e.g. PART 1: INTERPRETATION, PART 2: AUTHORISATION):", _
+        "Act Reference Checker - Parts")
+    If Len(Trim(csvInput)) = 0 Then Exit Sub
+
+    Parts_List = ParseCSVList(csvInput)
+    If Not HasItems(Parts_List) Then
+        MsgBox "No valid Part headings found in input.", vbExclamation
         Exit Sub
     End If
 
-    ' Step 4: Process each Part
-    For i = 1 To Parts_List.Count
-        ProcessPart doc, Parts_List, i, Act_List
+    ' --- Step 3: Resolve Part headings to document ranges ---
+    Set PartRanges = BuildPartRanges(doc, Parts_List)
+    If PartRanges Is Nothing Then
+        ' BuildPartRanges already showed the error message
+        Exit Sub
+    End If
+
+    ' --- Step 4: Process each Part range ---
+    For i = 1 To PartRanges.Count
+        ProcessPartRange doc, PartRanges(i), Act_List
     Next i
 
     MsgBox "Reference checking complete." & vbCrLf & _
-           Parts_List.Count & " Part(s) scanned." & vbCrLf & _
+           PartRanges.Count & " Part(s) scanned." & vbCrLf & _
            "Check document comments for flagged duplicates.", _
            vbInformation, "Act Reference Checker"
 End Sub
 
 ' ---------------------------------------------------------------------------
-' ParseCSV - split comma-separated string into trimmed array
+' ParseCSVList - split comma-separated string into a trimmed, ordered array
 ' ---------------------------------------------------------------------------
-Private Function ParseCSV(ByVal csv As String) As String()
+' Returns a String array with LBound 0. If there are no valid items, returns
+' an unallocated array (test with HasItems before using).
+' ---------------------------------------------------------------------------
+Private Function ParseCSVList(ByVal csv As String) As String()
     Dim raw() As String
-    Dim cleaned() As String
+    Dim result() As String
     Dim i As Long
     Dim count As Long
 
@@ -81,84 +96,193 @@ Private Function ParseCSV(ByVal csv As String) As String()
     Next i
 
     If count = 0 Then
-        cleaned = Split("", ",")  ' empty array
-        ParseCSV = cleaned
+        ' Return unallocated array
+        ParseCSVList = result
         Exit Function
     End If
 
-    ReDim cleaned(0 To count - 1)
+    ReDim result(0 To count - 1)
     count = 0
     For i = LBound(raw) To UBound(raw)
         If Len(Trim(raw(i))) > 0 Then
-            cleaned(count) = Trim(raw(i))
+            result(count) = Trim(raw(i))
             count = count + 1
         End If
     Next i
 
-    ParseCSV = cleaned
+    ParseCSVList = result
 End Function
 
 ' ---------------------------------------------------------------------------
-' FindDocumentParts - locate paragraphs that begin a "Part" division
+' HasItems - check whether a String array has been allocated and has items
 ' ---------------------------------------------------------------------------
-' Looks for paragraphs whose text starts with "Part" followed by a number,
-' e.g. "Part 1", "Part 2 - Definitions", "PART III".
-' Returns a Collection of Paragraph objects marking each Part boundary.
+Private Function HasItems(arr() As String) As Boolean
+    On Error GoTo NoItems
+    If UBound(arr) >= LBound(arr) Then
+        HasItems = True
+    Else
+        HasItems = False
+    End If
+    Exit Function
+NoItems:
+    HasItems = False
+End Function
+
 ' ---------------------------------------------------------------------------
-Private Function FindDocumentParts(doc As Document) As Collection
-    Dim parts As New Collection
-    Dim para As Paragraph
-    Dim txt As String
-    Dim re As Object
+' NormaliseText - normalise a string for heading comparison
+' ---------------------------------------------------------------------------
+' Trims, collapses repeated internal spaces, and lowercases.
+' ---------------------------------------------------------------------------
+Private Function NormaliseText(ByVal s As String) As String
+    Dim result As String
+    result = Trim(s)
 
-    Set re = CreateObject("VBScript.RegExp")
-    re.Pattern = "^\s*Part\s+(\d+|[IVXLCDM]+)\b"
-    re.IgnoreCase = True
+    ' Collapse repeated spaces
+    Do While InStr(result, "  ") > 0
+        result = Replace(result, "  ", " ")
+    Loop
 
-    For Each para In doc.Paragraphs
-        txt = para.Range.Text
-        If re.Test(txt) Then
-            parts.Add para
+    ' Strip trailing paragraph mark (Chr(13)) that Word appends to
+    ' paragraph text - without this, comparisons would always fail
+    Do While Len(result) > 0
+        Dim lastCh As String
+        lastCh = Right$(result, 1)
+        If lastCh = vbCr Or lastCh = vbLf Or lastCh = Chr$(7) Then
+            result = Left$(result, Len(result) - 1)
+        Else
+            Exit Do
         End If
-    Next para
+    Loop
 
-    Set FindDocumentParts = parts
+    NormaliseText = LCase$(result)
 End Function
 
 ' ---------------------------------------------------------------------------
-' ProcessPart - scan one Part for Section references and flag duplicates
+' BuildPartRanges - resolve user-supplied headings to document ranges
 ' ---------------------------------------------------------------------------
-Private Sub ProcessPart( _
+' For each heading in Parts_List, finds the matching paragraph in the
+' document. Returns a Collection of Range objects, one per Part.
+' Returns Nothing and shows an error if any heading is missing, duplicated,
+' or if headings are not in increasing document order.
+' ---------------------------------------------------------------------------
+Private Function BuildPartRanges( _
         doc As Document, _
-        Parts_List As Collection, _
-        partIndex As Long, _
+        Parts_List() As String) As Collection
+
+    Dim partCount As Long
+    Dim i As Long
+    Dim j As Long
+
+    partCount = UBound(Parts_List) - LBound(Parts_List) + 1
+
+    ' --- Find each heading's paragraph position ---
+    Dim startPositions() As Long   ' document character position
+    Dim foundParas() As Paragraph  ' the matched paragraph
+    ReDim startPositions(0 To partCount - 1)
+    ReDim foundParas(0 To partCount - 1)
+
+    Dim para As Paragraph
+    Dim normParaText As String
+
+    For i = 0 To partCount - 1
+        Dim normHeading As String
+        Dim matchCount As Long
+        Dim matchedPara As Paragraph
+
+        normHeading = NormaliseText(Parts_List(i))
+        matchCount = 0
+        Set matchedPara = Nothing
+
+        For Each para In doc.Paragraphs
+            normParaText = NormaliseText(para.Range.Text)
+            If normParaText = normHeading Then
+                matchCount = matchCount + 1
+                If matchedPara Is Nothing Then
+                    Set matchedPara = para
+                End If
+            End If
+        Next para
+
+        ' --- Validate: heading must exist ---
+        If matchCount = 0 Then
+            MsgBox "Part heading not found in document:" & vbCrLf & vbCrLf & _
+                   """" & Parts_List(i) & """" & vbCrLf & vbCrLf & _
+                   "Please check spelling and try again.", _
+                   vbCritical, "Act Reference Checker"
+            Set BuildPartRanges = Nothing
+            Exit Function
+        End If
+
+        ' --- Validate: heading must not be duplicated ---
+        If matchCount > 1 Then
+            MsgBox "Part heading appears " & matchCount & " times in the " & _
+                   "document:" & vbCrLf & vbCrLf & _
+                   """" & Parts_List(i) & """" & vbCrLf & vbCrLf & _
+                   "The heading must be unique. Please make it more specific.", _
+                   vbCritical, "Act Reference Checker"
+            Set BuildPartRanges = Nothing
+            Exit Function
+        End If
+
+        Set foundParas(i) = matchedPara
+        startPositions(i) = matchedPara.Range.Start
+    Next i
+
+    ' --- Validate: headings must be in increasing document order ---
+    For i = 0 To partCount - 2
+        If startPositions(i) >= startPositions(i + 1) Then
+            MsgBox "Part headings are not in document order." & vbCrLf & vbCrLf & _
+                   """" & Parts_List(i) & """" & " appears at or after " & _
+                   """" & Parts_List(i + 1) & """" & " in the document." & _
+                   vbCrLf & vbCrLf & _
+                   "Please supply headings in the order they appear.", _
+                   vbCritical, "Act Reference Checker"
+            Set BuildPartRanges = Nothing
+            Exit Function
+        End If
+    Next i
+
+    ' --- Build ranges ---
+    Dim ranges As New Collection
+    For i = 0 To partCount - 1
+        Dim startPos As Long
+        Dim endPos As Long
+
+        startPos = startPositions(i)
+
+        If i < partCount - 1 Then
+            ' End just before the next Part heading
+            endPos = startPositions(i + 1)
+        Else
+            ' Last Part runs to end of document
+            endPos = doc.Content.End
+        End If
+
+        If endPos > startPos Then
+            ranges.Add doc.Range(startPos, endPos)
+        End If
+    Next i
+
+    Set BuildPartRanges = ranges
+End Function
+
+' ---------------------------------------------------------------------------
+' ProcessPartRange - scan one Part range for Section references and flag
+'                    duplicates
+' ---------------------------------------------------------------------------
+Private Sub ProcessPartRange( _
+        doc As Document, _
+        partRange As Range, _
         Act_List() As String)
 
-    ' --- Build the range covering this Part ---
-    Dim startPos As Long
-    Dim endPos As Long
-
-    startPos = Parts_List(partIndex).Range.Start
-
-    If partIndex < Parts_List.Count Then
-        endPos = Parts_List(partIndex + 1).Range.Start - 1
-    Else
-        endPos = doc.Content.End
-    End If
-
-    ' Guard against invalid range
-    If endPos <= startPos Then Exit Sub
-
-    Dim partRange As Range
-    Set partRange = doc.Range(startPos, endPos)
-
-    ' --- First_Seen dictionary: key = "Section N|ActName", value = True ---
+    ' --- Fresh First_Seen dictionary for this Part ---
+    ' Key = "Section N|ActName", value = True
     Dim First_Seen As Object
     Set First_Seen = CreateObject("Scripting.Dictionary")
     First_Seen.CompareMode = vbTextCompare
 
     ' --- Regex to find "Section <number>" ---
-    ' Captures digits only (stops at "(" or lowercase letter per spec)
+    ' Captures digits only (stops at "(" or lowercase letter)
     Dim re As Object
     Set re = CreateObject("VBScript.RegExp")
     re.Pattern = "Section\s+(\d+)"
