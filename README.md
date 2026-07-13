@@ -40,6 +40,19 @@ Lists can be referenced by column letter or by header name. Use `--sheet` to
 pick a source sheet (defaults to the active sheet) and `--output` to write
 results to a copy instead of saving in place.
 
+### Standalone DOCX parser (no Python required)
+
+`docx_parser.html` is a self-contained static page — open it directly in any
+modern browser (double-click the file). It has **no web access, no server,
+and no Python**: a Content-Security-Policy blocks all network requests, and
+the .docx is parsed entirely with built-in browser JavaScript
+(`DecompressionStream` for the ZIP, `DOMParser` for the XML).
+
+Drop in a `.docx` and get **JSON or plain text** out (copy or download):
+body paragraphs with styles and list levels, tables, headers, footers,
+footnotes, endnotes, and core document properties. Tracked-change deletions
+and field codes are skipped; images and formatting are not extracted.
+
 ## What it does
 
 Each item is cleaned (leading numbering stripped, punctuation removed,
@@ -58,3 +71,6 @@ character-bag similarity measure. A new results sheet contains:
 
 - `fuzzy_list_compare.py` — core comparison logic and CLI (port of `FuzzyListCompare.bas`)
 - `fuzzy_compare_gui.py` — Tkinter GUI (port of the `frmFuzzyCompare` UserForm)
+- `docx_parser.html` — standalone offline DOCX → JSON/text extractor (pure browser JS, no Python)
+- `code_txt/` — the Python sources saved as `.txt` copies
+- `.claude/skills/fuzzy-list-compare/SKILL.md` — Claude Code skill for running comparisons

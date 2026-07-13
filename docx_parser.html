@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Hard guarantee of zero network access: block every external request. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>DOCX Parser - Standalone</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --text: #1c2530; --muted: #5b6a7a;
+    --accent: #1a6fb5; --border: #d4dae1; --drop: #eef4fa; --error: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181d; --panel: #1d232b; --text: #e7ecf1; --muted: #9aa8b5;
+      --accent: #5aa4dd; --border: #333d48; --drop: #1a2531; --error: #ff7b72;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  #dropzone {
+    border: 2px dashed var(--border); border-radius: 10px; background: var(--drop);
+    padding: 40px 20px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #dropzone.dragover { border-color: var(--accent); }
+  #dropzone strong { color: var(--accent); }
+  #fileInput { display: none; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-top: 16px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .row .spacer { flex: 1; }
+  #stats { color: var(--muted); font-size: .9rem; }
+  label.fmt { margin-right: 4px; cursor: pointer; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 7px 14px; font: inherit; cursor: pointer;
+  }
+  button.secondary { background: transparent; color: var(--accent);
+    border: 1px solid var(--accent); }
+  button:active { opacity: .8; }
+  #output {
+    width: 100%; height: 380px; margin-top: 12px; resize: vertical;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px;
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+    white-space: pre; overflow: auto;
+  }
+  #error { color: var(--error); margin-top: 12px; white-space: pre-wrap; display: none; }
+  #results { display: none; }
+  footer { color: var(--muted); font-size: .85rem; margin-top: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>DOCX Parser</h1>
+  <p class="sub">Standalone, offline .docx text extractor. Everything runs in your
+  browser with plain JavaScript &mdash; no uploads, no network, no server, no Python.</p>
+
+  <div id="dropzone" tabindex="0" role="button"
+       aria-label="Choose or drop a .docx file">
+    Drop a <strong>.docx</strong> file here, or <strong>click to browse</strong>
+  </div>
+  <input id="fileInput" type="file" accept=".docx">
+
+  <div id="error"></div>
+
+  <div id="results" class="panel">
+    <div class="row">
+      <span id="stats"></span>
+      <span class="spacer"></span>
+      <span>
+        Output:
+        <label class="fmt"><input type="radio" name="fmt" value="json" checked> JSON</label>
+        <label class="fmt"><input type="radio" name="fmt" value="text"> Text</label>
+      </span>
+      <button id="btnCopy" class="secondary">Copy</button>
+      <button id="btnDownload">Download</button>
+    </div>
+    <textarea id="output" readonly spellcheck="false"></textarea>
+  </div>
+
+  <footer>Parses the WordprocessingML inside the .docx (a ZIP archive): body
+  paragraphs, tables, list markers, headers, footers, footnotes, endnotes, and
+  core document properties. Tracked-change deletions and field codes are
+  skipped. Images, embedded objects, and formatting are not extracted.</footer>
+</main>
+
+<script>
+"use strict";
+
+/* ======================================================================
+ * Minimal ZIP reader (a .docx is a ZIP archive).
+ * Uses the browser's built-in DecompressionStream - no libraries.
+ * ==================================================================== */
+
+async function inflateRaw(bytes) {
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("This browser lacks DecompressionStream; please use a " +
+                    "current version of Chrome, Edge, Firefox, or Safari.");
+  }
+  const stream = new Blob([bytes]).stream()
+    .pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function readZip(buffer) {
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  const u16 = (o) => view.getUint16(o, true);
+  const u32 = (o) => view.getUint32(o, true);
+
+  // Locate the End Of Central Directory record (may be preceded by a comment).
+  let eocd = -1;
+  const scanStart = Math.max(0, buffer.byteLength - 22 - 65535);
+  for (let i = buffer.byteLength - 22; i >= scanStart; i--) {
+    if (u32(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("Not a .docx/ZIP file (no end-of-central-directory record).");
+
+  const entryCount = u16(eocd + 10);
+  let off = u32(eocd + 16);
+  const decoder = new TextDecoder("utf-8");
+  const entries = new Map();
+
+  for (let n = 0; n < entryCount; n++) {
+    if (u32(off) !== 0x02014b50) throw new Error("Corrupt ZIP central directory.");
+    const method = u16(off + 10);
+    const compSize = u32(off + 20);
+    const nameLen = u16(off + 28);
+    const extraLen = u16(off + 30);
+    const commentLen = u16(off + 32);
+    const localOffset = u32(off + 42);
+    if (compSize === 0xffffffff || localOffset === 0xffffffff) {
+      throw new Error("ZIP64 archives are not supported.");
+    }
+    const name = decoder.decode(bytes.subarray(off + 46, off + 46 + nameLen));
+    entries.set(name, { method, compSize, localOffset });
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+
+  return {
+    names: [...entries.keys()],
+    async text(name) {
+      const e = entries.get(name);
+      if (!e) return null;
+      if (u32(e.localOffset) !== 0x04034b50) throw new Error("Corrupt ZIP local header.");
+      const nameLen = u16(e.localOffset + 26);
+      const extraLen = u16(e.localOffset + 28);
+      const start = e.localOffset + 30 + nameLen + extraLen;
+      const data = bytes.subarray(start, start + e.compSize);
+      let raw;
+      if (e.method === 0) raw = data;                 // stored
+      else if (e.method === 8) raw = await inflateRaw(data); // deflate
+      else throw new Error("Unsupported ZIP compression method: " + e.method);
+      return decoder.decode(raw);
+    },
+  };
+}
+
+/* ======================================================================
+ * WordprocessingML parsing with the built-in DOMParser.
+ * Elements are matched by localName so both the transitional and strict
+ * OOXML namespaces work.
+ * ==================================================================== */
+
+function parseXml(xml, partName) {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) {
+    throw new Error("Could not parse " + partName + " (malformed XML).");
+  }
+  return doc;
+}
+
+function attr(el, localName) {
+  for (const a of el.attributes) {
+    if (a.localName === localName) return a.value;
+  }
+  return null;
+}
+
+function firstChild(el, localName) {
+  for (const c of el.children) {
+    if (c.localName === localName) return c;
+  }
+  return null;
+}
+
+// Text of a paragraph/run subtree: w:t text, tabs, breaks; skips deleted
+// text, field instructions, and property containers.
+function runText(node) {
+  let out = "";
+  for (const child of node.children) {
+    switch (child.localName) {
+      case "t": out += child.textContent; break;
+      case "tab": out += "\t"; break;
+      case "br": case "cr": out += "\n"; break;
+      case "noBreakHyphen": out += "‑"; break;
+      case "delText": case "instrText": case "pPr": case "rPr":
+      case "sectPr": case "tblPr": case "numPr": break;
+      default: out += runText(child); // hyperlink, smartTag, sdt, ins, run...
+    }
+  }
+  return out;
+}
+
+function parseParagraph(p) {
+  const para = { text: runText(p) };
+  const pPr = firstChild(p, "pPr");
+  if (pPr) {
+    const pStyle = firstChild(pPr, "pStyle");
+    if (pStyle) para.style = attr(pStyle, "val");
+    const numPr = firstChild(pPr, "numPr");
+    if (numPr) {
+      const ilvl = firstChild(numPr, "ilvl");
+      const numId = firstChild(numPr, "numId");
+      para.list = {
+        level: ilvl ? parseInt(attr(ilvl, "val") || "0", 10) : 0,
+        numId: numId ? attr(numId, "val") : null,
+      };
+    }
+  }
+  return para;
+}
+
+function parseTable(tbl) {
+  const rows = [];
+  for (const tr of tbl.children) {
+    if (tr.localName !== "tr") continue;
+    const cells = [];
+    for (const tc of tr.children) {
+      if (tc.localName !== "tc") continue;
+      cells.push(cellText(tc));
+    }
+    rows.push(cells);
+  }
+  return { rows };
+}
+
+function cellText(tc) {
+  const parts = [];
+  for (const child of tc.children) {
+    if (child.localName === "p") parts.push(runText(child));
+    else if (child.localName === "tbl") {
+      for (const row of parseTable(child).rows) parts.push(row.join("\t"));
+    } else if (child.localName === "sdt") {
+      const content = firstChild(child, "sdtContent");
+      if (content) parts.push(cellText(content));
+    }
+  }
+  return parts.join("\n").replace(/\n+$/, "");
+}
+
+// Walk a body-like container into an ordered list of blocks.
+function parseBlocks(container) {
+  const blocks = [];
+  for (const child of container.children) {
+    if (child.localName === "p") {
+      blocks.push({ type: "paragraph", ...parseParagraph(child) });
+    } else if (child.localName === "tbl") {
+      blocks.push({ type: "table", ...parseTable(child) });
+    } else if (child.localName === "sdt") {
+      const content = firstChild(child, "sdtContent");
+      if (content) blocks.push(...parseBlocks(content));
+    }
+  }
+  return blocks;
+}
+
+function findByLocalName(root, localName) {
+  const all = root.getElementsByTagName("*");
+  const found = [];
+  for (const el of all) if (el.localName === localName) found.push(el);
+  return found;
+}
+
+function parseCoreProps(doc) {
+  const meta = {};
+  const wanted = ["title", "subject", "creator", "keywords", "description",
+                  "lastModifiedBy", "revision", "created", "modified"];
+  for (const el of doc.documentElement.children) {
+    if (wanted.includes(el.localName) && el.textContent.trim() !== "") {
+      meta[el.localName] = el.textContent.trim();
+    }
+  }
+  return meta;
+}
+
+function parseNotes(doc, noteLocalName) {
+  const notes = [];
+  for (const note of findByLocalName(doc, noteLocalName)) {
+    const type = attr(note, "type");
+    if (type === "separator" || type === "continuationSeparator") continue;
+    const text = parseBlocks(note)
+      .filter((b) => b.type === "paragraph").map((b) => b.text)
+      .join("\n").trim();
+    if (text !== "") notes.push({ id: attr(note, "id"), text });
+  }
+  return notes;
+}
+
+async function parseDocx(buffer, fileName) {
+  const zip = await readZip(buffer);
+
+  const documentXml = await zip.text("word/document.xml");
+  if (documentXml === null) {
+    throw new Error("No word/document.xml inside the archive - " +
+                    "this does not look like a .docx document.");
+  }
+  const doc = parseXml(documentXml, "word/document.xml");
+  const body = findByLocalName(doc, "body")[0];
+  if (!body) throw new Error("word/document.xml has no document body.");
+
+  const result = {
+    source: fileName,
+    metadata: {},
+    blocks: parseBlocks(body),
+    headers: [],
+    footers: [],
+    footnotes: [],
+    endnotes: [],
+  };
+
+  const coreXml = await zip.text("docProps/core.xml");
+  if (coreXml !== null) {
+    try { result.metadata = parseCoreProps(parseXml(coreXml, "docProps/core.xml")); }
+    catch (e) { /* metadata is optional - ignore a malformed part */ }
+  }
+
+  for (const name of zip.names) {
+    const m = /^word\/(header|footer)\d*\.xml$/.exec(name);
+    if (!m) continue;
+    const partDoc = parseXml(await zip.text(name), name);
+    const text = parseBlocks(partDoc.documentElement)
+      .filter((b) => b.type === "paragraph").map((b) => b.text)
+      .join("\n").trim();
+    if (text !== "") {
+      result[m[1] === "header" ? "headers" : "footers"].push({ part: name, text });
+    }
+  }
+
+  const footnotesXml = await zip.text("word/footnotes.xml");
+  if (footnotesXml !== null) {
+    result.footnotes = parseNotes(parseXml(footnotesXml, "word/footnotes.xml"), "footnote");
+  }
+  const endnotesXml = await zip.text("word/endnotes.xml");
+  if (endnotesXml !== null) {
+    result.endnotes = parseNotes(parseXml(endnotesXml, "word/endnotes.xml"), "endnote");
+  }
+
+  return result;
+}
+
+/* ======================================================================
+ * Output rendering
+ * ==================================================================== */
+
+function toJsonOutput(result) {
+  const paragraphs = [];
+  const tables = [];
+  for (const block of result.blocks) {
+    if (block.type === "paragraph") {
+      const p = { index: paragraphs.length, text: block.text };
+      if (block.style) p.style = block.style;
+      if (block.list) p.list = block.list;
+      paragraphs.push(p);
+    } else {
+      tables.push({ index: tables.length, rows: block.rows });
+    }
+  }
+  const out = {
+    source: result.source,
+    metadata: result.metadata,
+    counts: {
+      paragraphs: paragraphs.length,
+      tables: tables.length,
+      words: countWords(result),
+    },
+    paragraphs,
+    tables,
+  };
+  for (const key of ["headers", "footers", "footnotes", "endnotes"]) {
+    if (result[key].length) out[key] = result[key];
+  }
+  return JSON.stringify(out, null, 2);
+}
+
+function toTextOutput(result) {
+  const lines = [];
+  for (const block of result.blocks) {
+    if (block.type === "paragraph") {
+      if (block.list) lines.push("  ".repeat(block.list.level) + "- " + block.text);
+      else lines.push(block.text);
+    } else {
+      for (const row of block.rows) lines.push(row.join("\t"));
+    }
+  }
+  const sections = [lines.join("\n").replace(/\n{3,}/g, "\n\n").trim()];
+  for (const [key, label] of [["headers", "HEADERS"], ["footers", "FOOTERS"],
+                              ["footnotes", "FOOTNOTES"], ["endnotes", "ENDNOTES"]]) {
+    if (result[key].length) {
+      sections.push("--- " + label + " ---\n" +
+        result[key].map((n) => n.text).join("\n"));
+    }
+  }
+  return sections.join("\n\n");
+}
+
+function countWords(result) {
+  let text = "";
+  for (const block of result.blocks) {
+    if (block.type === "paragraph") text += block.text + " ";
+    else for (const row of block.rows) text += row.join(" ") + " ";
+  }
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  return words.length;
+}
+
+/* ======================================================================
+ * UI wiring
+ * ==================================================================== */
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const resultsEl = document.getElementById("results");
+const errorEl = document.getElementById("error");
+const statsEl = document.getElementById("stats");
+const outputEl = document.getElementById("output");
+
+let parsed = null;
+let baseName = "document";
+
+function showError(message) {
+  errorEl.textContent = message;
+  errorEl.style.display = "block";
+  resultsEl.style.display = "none";
+}
+
+function currentFormat() {
+  return document.querySelector('input[name="fmt"]:checked').value;
+}
+
+function render() {
+  if (!parsed) return;
+  outputEl.value = currentFormat() === "json"
+    ? toJsonOutput(parsed) : toTextOutput(parsed);
+}
+
+async function handleFile(file) {
+  errorEl.style.display = "none";
+  try {
+    parsed = await parseDocx(await file.arrayBuffer(), file.name);
+    baseName = file.name.replace(/\.docx$/i, "") || "document";
+    const nParas = parsed.blocks.filter((b) => b.type === "paragraph").length;
+    const nTables = parsed.blocks.filter((b) => b.type === "table").length;
+    statsEl.textContent = file.name + ": " + nParas + " paragraph" +
+      (nParas === 1 ? "" : "s") + ", " + nTables + " table" +
+      (nTables === 1 ? "" : "s") + ", " + countWords(parsed) + " words";
+    resultsEl.style.display = "block";
+    render();
+  } catch (err) {
+    parsed = null;
+    showError("Could not parse the file.\n" + err.message);
+  }
+}
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+});
+fileInput.addEventListener("change", () => {
+  if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+dropzone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  dropzone.classList.add("dragover");
+});
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("dragover");
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+
+for (const radio of document.querySelectorAll('input[name="fmt"]')) {
+  radio.addEventListener("change", render);
+}
+
+document.getElementById("btnCopy").addEventListener("click", async () => {
+  outputEl.select();
+  try { await navigator.clipboard.writeText(outputEl.value); }
+  catch (e) { document.execCommand("copy"); }
+});
+
+document.getElementById("btnDownload").addEventListener("click", () => {
+  const isJson = currentFormat() === "json";
+  const blob = new Blob([outputEl.value],
+    { type: isJson ? "application/json" : "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = baseName + (isJson ? ".json" : ".txt");
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+</script>
+</body>
+</html>
