@@ -1,5 +1,7 @@
 # Fuzzy List Compare
 
+> **Retired (28 Sep 2026).** No longer maintained. Kept for reference only; the form file is incomplete (see Install step 5).
+
 **Roberts Macros: no macro too micro.**
 
 An Excel VBA macro that compares two lists and finds the items that are probably the same, even when they are not spelled identically. Leading numbering, punctuation, spacing and case are ignored. Each item in the first list is paired with its best match in the second list and given a confidence score.
