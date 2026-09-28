@@ -1,0 +1,5 @@
+# The VBA editor needs CRLF line endings; keep them byte-for-byte so
+# files downloaded straight from GitHub import cleanly.
+*.bas -text
+*.frm -text
+*.cls -text

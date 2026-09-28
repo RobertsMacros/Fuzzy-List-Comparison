@@ -1,10 +1,8 @@
 # Fuzzy List Compare
 
-> **Retired (28 Sep 2026).** No longer maintained. Kept for reference only; the form file is incomplete (see Install step 5).
-
 **Roberts Macros: no macro too micro.**
 
-An Excel VBA macro that compares two lists and finds the items that are probably the same, even when they are not spelled identically. Leading numbering, punctuation, spacing and case are ignored. Each item in the first list is paired with its best match in the second list and given a confidence score.
+An Excel VBA macro that compares two lists and finds the items that are probably the same, even when they are not spelled identically. List numbering ("1.", "(3)", "01_"), file extensions (".pdf", ".docx"), punctuation, spacing and case are ignored. Years and other long numbers are kept, so "2020 Budget" and "2021 Budget" are not treated as the same. Each item in the first list is paired with its best match in the second list and given a confidence score.
 
 It is useful for checking a list of documents against a folder of files, one index against another, or any two lists that should line up but were typed by different people.
 
@@ -19,25 +17,13 @@ The macro adds a new sheet named `<first list> vs <second list>`. Your original 
 
 ## Install
 
-You need desktop Excel for Windows with macros enabled. Excel for Mac cannot build the window (UserForms cannot be edited on Mac), so set it up on Windows first; the finished workbook then runs on either.
+You need desktop Excel with macros enabled. Set it up in Excel for Windows; the finished workbook also runs in Excel for Mac (except **Import Filenames**, which is Windows only).
 
 1. Download `FuzzyListCompare.bas` and `frmFuzzyCompare.frm` from this repository.
 2. Open the workbook you want to use it in, or your Personal Macro Workbook (`PERSONAL.XLSB`) to have it in every workbook.
 3. Press **Alt+F11** to open the Visual Basic Editor.
-4. Choose **File → Import File…** and import `FuzzyListCompare.bas`. Do the same for `frmFuzzyCompare.frm`.
-5. The form file holds the code but not the on-screen controls, so add them once. Double-click `frmFuzzyCompare`, open the **Toolbox** and add these, setting each control's **(Name)** in the Properties window:
-
-   | Control | (Name) | Notes |
-   |---|---|---|
-   | TextBox | `txtInstructions` | Set `MultiLine` to True and `ScrollBars` to Vertical |
-   | ComboBox | `cmbPrimary` | The list to check |
-   | ComboBox | `cmbSecondary` | The list to compare against |
-   | ComboBox | `cmbThreshold` | The confidence threshold |
-   | CommandButton | `btnImport` | Caption: Import Filenames |
-   | CommandButton | `btnRun` | Caption: Run Comparison |
-   | CommandButton | `btnClose` | Caption: Close |
-
-6. Save the workbook as `.xlsm` (or save `PERSONAL.XLSB`).
+4. Choose **File → Import File…** and import `FuzzyListCompare.bas`. Do the same for `frmFuzzyCompare.frm`. The window builds its own buttons and boxes when it opens, so there is nothing to draw.
+5. Save the workbook as `.xlsm` (or save `PERSONAL.XLSB`).
 
 To add a button, go to **File → Options → Customize Ribbon**, add a new group and add the `FuzzyListCompare` macro to it.
 
@@ -48,8 +34,16 @@ To add a button, go to **File → Options → Customize Ribbon**, add a new grou
 3. In the window:
    - **Primary list**: the list you want to check.
    - **Secondary list**: the list to check it against.
-   - **Threshold**: how close a match must be to count (default 70%). Lower it to catch looser matches; raise it to cut false matches.
-4. Click **Run Comparison**. The results sheet opens.
+   - **Threshold**: how close a match must be to count (40–90%, default 70%). Lower it to catch looser matches; raise it to cut false matches.
+4. Click **Run Comparison** (or press Enter; Esc closes the window). The results sheet opens in the same workbook, next to your lists. Blank cells are skipped.
+
+### How the score works
+
+Each item is split into letter pairs within each word ("smith" → sm, mi, it, th). The score is the share of letter pairs the two items have in common, so word order hardly matters but a jumble of the same letters does not count as a match ("listen" vs "silent" scores 20%).
+
+### Updating from an older copy
+
+In the Visual Basic Editor, right-click `FuzzyListCompare` and `frmFuzzyCompare` → **Remove** (choose **No** when asked to export), then import the new files as in Install step 4.
 
 ### Comparing against a folder of files
 
@@ -60,4 +54,4 @@ Click **Import Filenames**, type the column letter to fill (for example `C`), th
 | File | What it does |
 |---|---|
 | `FuzzyListCompare.bas` | Cleaning, scoring, colouring and the results sheet. `FuzzyListCompare` is the macro to run |
-| `frmFuzzyCompare.frm` | The window: list pickers, threshold, filename import |
+| `frmFuzzyCompare.frm` | The window: list pickers, threshold, filename import. Its controls are created in code |

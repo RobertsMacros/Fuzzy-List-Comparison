@@ -1,10 +1,10 @@
 VERSION 5.00
 Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} frmFuzzyCompare
    Caption         =   "Fuzzy List Compare"
-   ClientHeight    =   7800
+   ClientHeight    =   7740
    ClientLeft      =   120
    ClientTop       =   465
-   ClientWidth     =   6600
+   ClientWidth     =   7200
    StartUpPosition =   1  'CenterOwner
 End
 Attribute VB_Name = "frmFuzzyCompare"
@@ -15,6 +15,18 @@ Attribute VB_Exposed = False
 Option Explicit
 
 ' -------------------------------------------------------
+' The controls are created in code (BuildControls), so importing this
+' .frm is all that is needed: no Toolbox work, no .frx file.
+' -------------------------------------------------------
+Private WithEvents mBtnImport As MSForms.CommandButton
+Private WithEvents mBtnRun As MSForms.CommandButton
+Private WithEvents mBtnClose As MSForms.CommandButton
+Private mTxtInstructions As MSForms.TextBox
+Private mCmbPrimary As MSForms.ComboBox
+Private mCmbSecondary As MSForms.ComboBox
+Private mCmbThreshold As MSForms.ComboBox
+
+' -------------------------------------------------------
 ' Module-level storage for detected lists
 ' -------------------------------------------------------
 Private m_colIndices() As Long
@@ -23,10 +35,93 @@ Private m_numLists As Long
 Private m_sourceWs As Worksheet
 
 ' -------------------------------------------------------
+' GetOrAdd - reuse a control drawn at design time, else create it
+' -------------------------------------------------------
+Private Function GetOrAdd(ByVal progId As String, ByVal ctlName As String) As Object
+    Dim ctl As Object
+    On Error Resume Next
+    Set ctl = Me.Controls(ctlName)
+    On Error GoTo 0
+    If ctl Is Nothing Then Set ctl = Me.Controls.Add(progId, ctlName, True)
+    Set GetOrAdd = ctl
+End Function
+
+Private Sub AddLabel(ByVal ctlName As String, ByVal cap As String, ByVal y As Single)
+    Dim lbl As Object
+    Set lbl = GetOrAdd("Forms.Label.1", ctlName)
+    lbl.Caption = cap
+    lbl.Left = 12
+    lbl.Top = y
+    lbl.Width = 330
+    lbl.Height = 14
+End Sub
+
+Private Sub PlaceCombo(ByVal cmb As MSForms.ComboBox, ByVal y As Single, ByVal w As Single)
+    cmb.Left = 12
+    cmb.Top = y
+    cmb.Width = w
+    cmb.Height = 18
+    cmb.Style = fmStyleDropDownList
+End Sub
+
+Private Sub PlaceButton(ByVal btn As MSForms.CommandButton, ByVal cap As String, ByVal x As Single, ByVal w As Single)
+    btn.Caption = cap
+    btn.Left = x
+    btn.Top = 350
+    btn.Width = w
+    btn.Height = 26
+End Sub
+
+' -------------------------------------------------------
+' BuildControls - lay out the window
+' -------------------------------------------------------
+Private Sub BuildControls()
+    Me.Caption = "Fuzzy List Compare"
+    Me.Width = 366
+    Me.Height = 410
+
+    Set mTxtInstructions = GetOrAdd("Forms.TextBox.1", "txtInstructions")
+    With mTxtInstructions
+        .Left = 12
+        .Top = 12
+        .Width = 330
+        .Height = 190
+        .MultiLine = True
+        .WordWrap = True
+        .ScrollBars = fmScrollBarsVertical
+        .Locked = True
+        .BackColor = Me.BackColor
+        .TabStop = False
+    End With
+
+    AddLabel "lblPrimary", "Primary list (the list to check):", 212
+    Set mCmbPrimary = GetOrAdd("Forms.ComboBox.1", "cmbPrimary")
+    PlaceCombo mCmbPrimary, 226, 330
+
+    AddLabel "lblSecondary", "Secondary list (the list to compare against):", 254
+    Set mCmbSecondary = GetOrAdd("Forms.ComboBox.1", "cmbSecondary")
+    PlaceCombo mCmbSecondary, 268, 330
+
+    AddLabel "lblThreshold", "Match threshold:", 296
+    Set mCmbThreshold = GetOrAdd("Forms.ComboBox.1", "cmbThreshold")
+    PlaceCombo mCmbThreshold, 310, 80
+
+    Set mBtnImport = GetOrAdd("Forms.CommandButton.1", "btnImport")
+    PlaceButton mBtnImport, "Import Filenames...", 12, 110
+    Set mBtnRun = GetOrAdd("Forms.CommandButton.1", "btnRun")
+    PlaceButton mBtnRun, "Run Comparison", 168, 96
+    mBtnRun.Default = True
+    Set mBtnClose = GetOrAdd("Forms.CommandButton.1", "btnClose")
+    PlaceButton mBtnClose, "Close", 272, 70
+    mBtnClose.Cancel = True
+End Sub
+
+' -------------------------------------------------------
 ' UserForm_Initialize - detect lists, populate controls
 ' -------------------------------------------------------
 Private Sub UserForm_Initialize()
     Set m_sourceWs = ActiveSheet
+    BuildControls
 
     ' -- Instructions --
     Dim txt As String
@@ -52,15 +147,14 @@ Private Sub UserForm_Initialize()
     txt = txt & "- Primary items with no good match" & vbCrLf
     txt = txt & "- Secondary items not matched" & vbCrLf & vbCrLf
     txt = txt & "Your original data is never modified."
-    txtInstructions.Value = txt
+    mTxtInstructions.Value = txt
 
     ' -- Threshold options --
-    cmbThreshold.AddItem "50%"
-    cmbThreshold.AddItem "60%"
-    cmbThreshold.AddItem "70%"
-    cmbThreshold.AddItem "80%"
-    cmbThreshold.AddItem "90%"
-    cmbThreshold.ListIndex = 2  ' Default to 70%
+    Dim pct As Variant
+    For Each pct In Array("40%", "50%", "60%", "70%", "80%", "90%")
+        mCmbThreshold.AddItem pct
+    Next pct
+    mCmbThreshold.ListIndex = 3  ' Default to 70%
 
     ' -- Detect list columns and populate combos --
     RefreshCombos
@@ -72,11 +166,11 @@ End Sub
 Private Sub RefreshCombos()
     Dim priIdx As Long
     Dim secIdx As Long
-    priIdx = cmbPrimary.ListIndex
-    secIdx = cmbSecondary.ListIndex
+    priIdx = mCmbPrimary.ListIndex
+    secIdx = mCmbSecondary.ListIndex
 
-    cmbPrimary.Clear
-    cmbSecondary.Clear
+    mCmbPrimary.Clear
+    mCmbSecondary.Clear
 
     Dim lastCol As Long
     lastCol = m_sourceWs.Cells(1, m_sourceWs.Columns.Count).End(xlToLeft).Column
@@ -97,8 +191,8 @@ Private Sub RefreshCombos()
                 m_colIndices(m_numLists) = c
                 m_colHeaders(m_numLists) = hdr
                 colLtr = Split(m_sourceWs.Cells(1, c).Address(True, False), "$")(0)
-                cmbPrimary.AddItem colLtr & " - " & hdr
-                cmbSecondary.AddItem colLtr & " - " & hdr
+                mCmbPrimary.AddItem colLtr & " - " & hdr
+                mCmbSecondary.AddItem colLtr & " - " & hdr
             End If
         Next c
 
@@ -108,17 +202,24 @@ Private Sub RefreshCombos()
         End If
     End If
 
-    ' Restore selections if still valid
-    If priIdx >= 0 And priIdx < cmbPrimary.ListCount Then cmbPrimary.ListIndex = priIdx
-    If secIdx >= 0 And secIdx < cmbSecondary.ListCount Then cmbSecondary.ListIndex = secIdx
+    ' Restore selections if still valid, else pick the first two lists
+    If priIdx < 0 Then priIdx = 0
+    If secIdx < 0 Then secIdx = 1
+    If priIdx < mCmbPrimary.ListCount Then mCmbPrimary.ListIndex = priIdx
+    If secIdx < mCmbSecondary.ListCount Then mCmbSecondary.ListIndex = secIdx
 
-    btnRun.Enabled = (m_numLists >= 2)
+    mBtnRun.Enabled = (m_numLists >= 2)
 End Sub
 
 ' -------------------------------------------------------
-' btnImport_Click - import filenames from a folder
+' mBtnImport_Click - import filenames from a folder
 ' -------------------------------------------------------
-Private Sub btnImport_Click()
+Private Sub mBtnImport_Click()
+#If Mac Then
+    MsgBox "Import Filenames works in Excel for Windows only. On a Mac, paste the file names into a column instead.", vbInformation, "Import Filenames"
+    Exit Sub
+#End If
+
     ' Step 1: Get target column letter
     Dim colLetter As String
     colLetter = InputBox("Enter column letter to import into (e.g. A, B, C):", "Import Filenames")
@@ -188,7 +289,8 @@ Private Sub btnImport_Click()
     folderName = Mid$(trimmedPath, InStrRev(trimmedPath, "\") + 1)
     m_sourceWs.Cells(1, targetCol).Value = folderName
 
-    ' Filenames in rows 2+
+    ' Filenames in rows 2+, as text so "001.pdf" or "=x" stay as typed
+    m_sourceWs.Range(m_sourceWs.Cells(2, targetCol), m_sourceWs.Cells(fileCount + 1, targetCol)).NumberFormat = "@"
     Dim r As Long
     For r = 1 To fileCount
         m_sourceWs.Cells(r + 1, targetCol).Value = fileNames(r)
@@ -204,38 +306,32 @@ Private Sub btnImport_Click()
 End Sub
 
 ' -------------------------------------------------------
-' btnRun_Click - validate inputs and run comparison
+' mBtnRun_Click - validate inputs and run comparison
 ' -------------------------------------------------------
-Private Sub btnRun_Click()
-    If cmbPrimary.ListIndex = -1 Then
+Private Sub mBtnRun_Click()
+    If mCmbPrimary.ListIndex = -1 Then
         MsgBox "Please select a primary list.", vbExclamation
         Exit Sub
     End If
 
-    If cmbSecondary.ListIndex = -1 Then
+    If mCmbSecondary.ListIndex = -1 Then
         MsgBox "Please select a secondary list.", vbExclamation
         Exit Sub
     End If
 
-    If cmbPrimary.ListIndex = cmbSecondary.ListIndex Then
+    If mCmbPrimary.ListIndex = mCmbSecondary.ListIndex Then
         MsgBox "Primary and secondary lists must be different.", vbExclamation
         Exit Sub
     End If
 
     Dim threshold As Double
-    Select Case cmbThreshold.ListIndex
-        Case 0: threshold = 0.5
-        Case 1: threshold = 0.6
-        Case 2: threshold = 0.7
-        Case 3: threshold = 0.8
-        Case 4: threshold = 0.9
-        Case Else: threshold = 0.7
-    End Select
+    threshold = 0.7
+    If mCmbThreshold.ListIndex >= 0 Then threshold = Val(Replace(mCmbThreshold.Value, "%", "")) / 100
 
     Dim priIdx As Long
     Dim secIdx As Long
-    priIdx = cmbPrimary.ListIndex + 1
-    secIdx = cmbSecondary.ListIndex + 1
+    priIdx = mCmbPrimary.ListIndex + 1
+    secIdx = mCmbSecondary.ListIndex + 1
 
     Me.Hide
 
@@ -245,8 +341,8 @@ Private Sub btnRun_Click()
 End Sub
 
 ' -------------------------------------------------------
-' btnClose_Click - close without running
+' mBtnClose_Click - close without running
 ' -------------------------------------------------------
-Private Sub btnClose_Click()
+Private Sub mBtnClose_Click()
     Unload Me
 End Sub
